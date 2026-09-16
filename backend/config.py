@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     video_cooldown_s: float = Field(default=4.0, gt=0)
     video_pixel_threshold: int = Field(default=18, gt=0, le=255)
     video_area_threshold: float = Field(default=0.006, gt=0, lt=1)
+    # >1 rejects single-frame noise (a real camera's auto-exposure/gain can
+    # cross the area threshold on one frame with nobody in view); requires
+    # that many consecutive detected frames before an episode starts.
+    video_rising_edge_frames: int = Field(default=1, ge=1)
 
     # ---- api ----
     host: str = "127.0.0.1"
@@ -75,6 +79,19 @@ class Settings(BaseSettings):
         if not value.startswith(("ws://", "wss://")):
             raise ValueError("event_stream_url must start with ws:// or wss://")
         return value
+
+    @property
+    def video_source_resolved(self) -> str | int:
+        """OpenCV takes a webcam index as an int and a file/URL as a str, and
+        does not coerce between them - a bare '0' string is treated as a
+        filename ('Couldn't read video stream from file "0"'), not device 0.
+        Config always arrives as a string (env vars have no int type), so the
+        numeric-looking case is converted here, once, at the edge."""
+        raw = self.video_source.strip()
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
 
 
 def load_settings() -> Settings:

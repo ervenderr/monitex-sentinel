@@ -55,14 +55,20 @@ class ScriptedDetector:
     fabricate spurious episodes.
     """
 
-    def __init__(self, sequence: list[bool]) -> None:
+    def __init__(self, sequence: list[bool], *, capture: FakeCapture | None = None) -> None:
         self._sequence = sequence
         self._index = 0
+        self._capture = capture
+        self.calls = 0
+        self.reads_before_first_call: int | None = None
 
     def reset(self) -> None:
         pass
 
     def update(self, _gray: np.ndarray) -> MotionReading:
+        self.calls += 1
+        if self.reads_before_first_call is None and self._capture is not None:
+            self.reads_before_first_call = self._capture.reads
         detected = self._sequence[min(self._index, len(self._sequence) - 1)]
         self._index += 1
         return MotionReading(
@@ -293,3 +299,66 @@ async def test_decode_latency_never_reaches_the_event_loop(
         f"a 20ms timer stalled to {worst_gap_ms:.0f}ms while a 300ms decode was in "
         "flight - decoding is blocking the event loop instead of running in a thread"
     )
+
+
+# ---- settings -> detector wiring -------------------------------------------
+
+
+def test_runtime_actually_applies_the_configured_thresholds() -> None:
+    """Regression: video_pixel_threshold and video_area_threshold existed as
+    Settings fields and in .env.example, but nothing constructed the detector
+    from them - the video worker always used FrameDiffDetector()'s hardcoded
+    defaults. Discovered live, against a real webcam whose auto-exposure noise
+    made the (apparently set) threshold override do nothing. This pins the
+    connection all the way from Settings to the detector actually used."""
+    from backend.config import Settings
+    from backend.runtime import SentinelRuntime
+    from backend.triage.base import StubProvider
+
+    settings = Settings(
+        _env_file=None,
+        llm_provider="stub",
+        video_enabled=False,  # do not actually open a capture for this test
+        video_pixel_threshold=42,
+        video_area_threshold=0.31,
+    )
+    runtime = SentinelRuntime(settings, provider=StubProvider())
+    detector = runtime.build_video_detector()
+
+    assert detector.pixel_threshold == 42
+    assert detector.area_threshold == 0.31
+
+
+async def test_warmup_frames_are_discarded_before_detection_starts(
+    intake: EventIntake, store: AlarmStore, metrics: Metrics
+) -> None:
+    """A fresh camera's auto-exposure/white-balance has not converged yet; the
+    warmup burst must be read (and discarded) before the detector sees
+    anything. Proven by recording how many capture reads had already happened
+    the first time the detector was ever called - it must be exactly
+    warmup_frames + 1 (the warmup burst, then the first real sampled frame),
+    never fewer, however the event loop happens to schedule things."""
+    capture = FakeCapture([quiet_frame()])
+    detector = ScriptedDetector([True], capture=capture)
+    run = make_worker(
+        capture=capture, intake=intake, metrics=metrics,
+        detector=detector, sample_interval_s=0.02, warmup_frames=5,
+    )
+    await _run(run, run_for_s=0.05)
+
+    assert detector.calls >= 1, "the worker must have gotten past warmup at all"
+    assert detector.reads_before_first_call == 6  # 5 warmup + the 1 real frame
+
+
+async def test_warmup_count_is_configurable_and_zero_skips_it(
+    intake: EventIntake, store: AlarmStore, metrics: Metrics
+) -> None:
+    capture = FakeCapture([quiet_frame()])
+    run = make_worker(
+        capture=capture, intake=intake, metrics=metrics,
+        detector=ScriptedDetector([True]),
+        sample_interval_s=0.02, warmup_frames=0,
+    )
+    await _run(run, run_for_s=0.03)
+
+    assert len(store.snapshot()) == 1, "with no warmup, the first real frame fires immediately"

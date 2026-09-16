@@ -178,3 +178,32 @@ def test_cooldown_delays_the_next_episode_after_one_ends() -> None:
 def test_debouncer_rejects_nonsense_configuration(kwargs: dict) -> None:
     with pytest.raises(ValueError):
         MotionDebouncer(**kwargs)
+
+
+def test_rising_edge_run_required_rejects_a_single_frame_blip() -> None:
+    """The fix for a real camera's auto-exposure/gain jump: one frame crossing
+    the area threshold with nobody in view must not fire an alarm on its own."""
+    debouncer = MotionDebouncer(cooldown_s=0.0, rising_edge_run_required=3)
+    assert debouncer.observe(True, now=0.0) is False
+    assert debouncer.observe(False, now=1.0) is False  # blip ends, run resets
+    assert debouncer.observe(True, now=2.0) is False  # starting over
+
+
+def test_rising_edge_run_required_fires_once_the_run_is_sustained() -> None:
+    debouncer = MotionDebouncer(cooldown_s=0.0, rising_edge_run_required=3)
+    assert debouncer.observe(True, now=0.0) is False
+    assert debouncer.observe(True, now=1.0) is False
+    assert debouncer.observe(True, now=2.0) is True  # third consecutive frame
+    assert debouncer.observe(True, now=3.0) is False  # already in the episode
+
+
+def test_rising_edge_run_required_default_preserves_single_frame_trigger() -> None:
+    """The default (1) is the original behaviour, correct for a low-noise
+    source like the committed synthetic clip - no regression for that path."""
+    debouncer = MotionDebouncer(cooldown_s=0.0)
+    assert debouncer.observe(True, now=0.0) is True
+
+
+def test_rising_edge_run_required_rejects_nonsense_configuration() -> None:
+    with pytest.raises(ValueError, match="rising_edge_run_required"):
+        MotionDebouncer(cooldown_s=1.0, rising_edge_run_required=0)

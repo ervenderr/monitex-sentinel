@@ -59,3 +59,24 @@ def test_generic_llm_api_key_works_for_any_provider() -> None:
 def test_unknown_provider_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown llm_provider"):
         build_provider(Settings(_env_file=None).model_copy(update={"llm_provider": "nope"}))
+
+
+# ---- video source resolution -----------------------------------------------
+
+
+def test_numeric_video_source_resolves_to_an_int_webcam_index() -> None:
+    """cv2.VideoCapture treats a string as a filename and an int as a device
+    index; it does not coerce '0' into device 0, so config must do it."""
+    settings = Settings(_env_file=None, video_source="0")
+    assert settings.video_source_resolved == 0
+    assert isinstance(settings.video_source_resolved, int)
+
+
+def test_path_video_source_stays_a_string() -> None:
+    settings = Settings(_env_file=None, video_source="assets/demo_camera.mp4")
+    assert settings.video_source_resolved == "assets/demo_camera.mp4"
+
+
+def test_whitespace_around_a_numeric_source_is_tolerated() -> None:
+    settings = Settings(_env_file=None, video_source="  2  ")
+    assert settings.video_source_resolved == 2

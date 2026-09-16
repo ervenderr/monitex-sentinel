@@ -84,11 +84,15 @@ async def video_worker(
     frame_size: tuple[int, int] = (160, 90),
     sample_interval_s: float = 0.25,
     cooldown_s: float = 4.0,
+    rising_edge_frames: int = 1,
+    warmup_frames: int = 8,
     reconnect_backoff_s: float = 2.0,
 ) -> None:
     loop = asyncio.get_running_loop()
     detector = detector or FrameDiffDetector()
-    debouncer = debouncer or MotionDebouncer(cooldown_s=cooldown_s)
+    debouncer = debouncer or MotionDebouncer(
+        cooldown_s=cooldown_s, rising_edge_run_required=rising_edge_frames
+    )
     capture: LoopingVideoCapture | None = None
 
     logger.info("video worker started (source=%r, site=%s/%s)", source, site_id, zone)
@@ -99,9 +103,19 @@ async def video_worker(
                 capture = await loop.run_in_executor(
                     None, partial(LoopingVideoCapture, source, frame_size=frame_size)
                 )
+                # A live camera's auto-exposure/white-balance has not
+                # converged in its first frames; discarding a burst before
+                # detection starts avoids treating that settling-in as
+                # motion. A looping file has no such transient, so this
+                # simply advances a few frames into an already-quiet clip -
+                # harmless there.
+                for _ in range(warmup_frames):
+                    await loop.run_in_executor(None, capture.read_gray)
                 detector.reset()
                 metrics.video_connected = True
-                logger.info("video source opened: %r", source)
+                logger.info(
+                    "video source opened: %r (warmed up %d frames)", source, warmup_frames
+                )
 
             gray = await loop.run_in_executor(None, capture.read_gray)
             metrics.video_frames_sampled += 1

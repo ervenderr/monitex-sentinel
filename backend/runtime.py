@@ -18,6 +18,7 @@ from backend.store import AlarmStore
 from backend.triage.base import TriageProvider
 from backend.triage.factory import build_provider
 from backend.triage.worker import triage_worker
+from backend.video.motion import FrameDiffDetector
 from backend.video.worker import video_worker
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,16 @@ class SentinelRuntime:
         if circuit_state is not None:
             self.metrics.bind_circuit(lambda: getattr(self.provider, "circuit_state", "closed"))
         self._tasks: list[asyncio.Task[None]] = []
+
+    def build_video_detector(self) -> FrameDiffDetector:
+        """Split out from start() so the settings -> detector wiring is
+        directly testable - this is exactly the kind of connection that looks
+        done because the Settings field and the .env.example line both exist,
+        while nothing actually reads the field. It didn't, once."""
+        return FrameDiffDetector(
+            pixel_threshold=self.settings.video_pixel_threshold,
+            area_threshold=self.settings.video_area_threshold,
+        )
 
     async def start(self) -> None:
         for index in range(self.settings.triage_workers):
@@ -72,13 +83,15 @@ class SentinelRuntime:
             self._tasks.append(
                 asyncio.create_task(
                     video_worker(
-                        source=self.settings.video_source,
+                        source=self.settings.video_source_resolved,
                         site_id=self.settings.video_site_id,
                         zone=self.settings.video_zone,
                         intake=self.intake,
                         metrics=self.metrics,
+                        detector=self.build_video_detector(),
                         sample_interval_s=1.0 / self.settings.video_sample_fps,
                         cooldown_s=self.settings.video_cooldown_s,
+                        rising_edge_frames=self.settings.video_rising_edge_frames,
                     ),
                     name="video",
                 )

@@ -73,26 +73,53 @@ class MotionDebouncer:
     flapping beyond what `quiet_run_required` alone catches.
     """
 
-    def __init__(self, *, cooldown_s: float, quiet_run_required: int = 2) -> None:
+    def __init__(
+        self,
+        *,
+        cooldown_s: float,
+        quiet_run_required: int = 2,
+        rising_edge_run_required: int = 1,
+    ) -> None:
         if cooldown_s < 0:
             raise ValueError("cooldown_s must not be negative")
         if quiet_run_required < 1:
             raise ValueError("quiet_run_required must be at least 1")
+        if rising_edge_run_required < 1:
+            raise ValueError("rising_edge_run_required must be at least 1")
         self._cooldown_s = cooldown_s
         self._quiet_run_required = quiet_run_required
+        self._rising_edge_run_required = rising_edge_run_required
         self._in_episode = False
         self._quiet_run = 0
+        self._rising_run = 0
         self._last_episode_end = float("-inf")
 
     def observe(self, detected: bool, now: float) -> bool:
-        """Feed one reading; returns True exactly when a new episode starts."""
+        """Feed one reading; returns True exactly when a new episode starts.
+
+        `rising_edge_run_required` > 1 requires that many *consecutive*
+        detected readings before declaring an episode - the fix for a real
+        camera, where auto-exposure or auto-gain can make a single frame
+        cross the motion threshold with nobody in view. A one-off brightness
+        step doesn't sustain across several samples; a person walking through
+        frame does. The default of 1 preserves the original single-frame
+        trigger, which is correct for a low-noise source like the committed
+        synthetic demo clip.
+        """
         if detected:
             self._quiet_run = 0
-            if not self._in_episode and (now - self._last_episode_end) >= self._cooldown_s:
+            if self._in_episode:
+                return False
+            if (now - self._last_episode_end) < self._cooldown_s:
+                return False
+            self._rising_run += 1
+            if self._rising_run >= self._rising_edge_run_required:
                 self._in_episode = True
+                self._rising_run = 0
                 return True
             return False
 
+        self._rising_run = 0
         if self._in_episode:
             self._quiet_run += 1
             if self._quiet_run >= self._quiet_run_required:
@@ -123,6 +150,14 @@ class FrameDiffDetector:
         self._pixel_threshold = pixel_threshold
         self._area_threshold = area_threshold
         self._previous: np.ndarray | None = None
+
+    @property
+    def pixel_threshold(self) -> int:
+        return self._pixel_threshold
+
+    @property
+    def area_threshold(self) -> float:
+        return self._area_threshold
 
     def reset(self) -> None:
         """Forget the previous frame - call after a loop/seek discontinuity so

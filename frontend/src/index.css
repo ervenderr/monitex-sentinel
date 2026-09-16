@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/* Palette taken from alarm annunciator panels: red alarm, amber trouble,
+   green normal, on the cool graphite of rack-mounted gear. Severity is the
+   information here, so the colour system is the interface, not decoration. */
+@theme {
+  --color-ground: #0a0e13;
+  --color-panel: #121922;
+  --color-raised: #18212c;
+  --color-rule: #222e3b;
+  --color-rule-bright: #32435a;
+
+  --color-ink: #e8eff6;
+  --color-ink-dim: #8da0b4;
+  --color-ink-faint: #5b6d80;
+
+  --color-critical: #ff4438;
+  --color-critical-dim: #4a1512;
+  --color-warning: #ffb020;
+  --color-warning-dim: #452e07;
+  --color-info: #4a9edb;
+  --color-info-dim: #12293c;
+  --color-live: #3fb950;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular numerals everywhere numbers are compared at a glance: confidence
+   values, latencies, and timestamps must line up column-wise to be scannable. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* The signature moment: an alarm's AI verdict landing and replacing the
+   instant rule verdict. Brief, then gone - it marks a change, it does not
+   demand attention the way a critical alarm does. */
+@keyframes verdict-land {
+  0% {
+    background-color: color-mix(in oklab, var(--color-rule-bright) 55%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.verdict-land {
+  animation: verdict-land 1.1s ease-out;
+}
+
+@keyframes lamp-bloom {
+  0%,
+  100% {
+    opacity: 0.32;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+.lamp-bloom {
+  animation: lamp-bloom 2s ease-in-out infinite;
+}
+
+@keyframes banner-pulse {
+  0%,
+  100% {
+    border-color: color-mix(in oklab, var(--color-critical) 45%, transparent);
+  }
+  50% {
+    border-color: var(--color-critical);
+  }
+}
+.banner-pulse {
+  animation: banner-pulse 2s ease-in-out infinite;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.slide-in {
+  animation: slide-in 0.18s ease-out;
+}
+
+/* A control room runs for hours. Anyone who needs motion stilled gets it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-ground);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-rule);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-rule-bright);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 2px;
+}

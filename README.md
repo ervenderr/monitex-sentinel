@@ -7,9 +7,10 @@ critical situations are impossible to miss.
 
 Built for the Monitex AI & Systems Developer technical assessment.
 
-> **Status: Phase 2 of 5 complete** — pipeline and AI triage both run end to
-> end. The dashboard is still Phase 3; today the live surface is SSE + JSON.
-> See [Roadmap](#roadmap) for what is and is not built yet.
+> **Status: Phase 3 of 5 complete** — ingest, AI triage, and the operator
+> dashboard all run end to end. See [Roadmap](#roadmap) for what remains.
+
+![The operator dashboard under a live feed](docs/dashboard.png)
 
 ---
 
@@ -21,13 +22,31 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or plain `pip`).
 # 1. install
 uv venv && uv pip install -e ".[dev]"
 cp .env.example .env
+(cd frontend && npm install && npm run build)
 
-# 2. start the event feed (terminal 1) - the generator supplied with the brief
-.venv/bin/python stream.py
+# 2. start the event feed (terminal 1)
+.venv/bin/python scripts/loadgen.py --rate 2      # realistic event mix
+# or: .venv/bin/python stream.py                  # the generator from the brief
 
-# 3. start the service (terminal 2)
+# 3. start the service (terminal 2) - serves the API and the dashboard
 .venv/bin/python -m backend.main
 ```
+
+Open **http://localhost:8000/**.
+
+For frontend development, run Vite separately and it proxies the API:
+
+```bash
+cd frontend && npm run dev     # http://localhost:5173
+```
+
+**On which generator to use.** `stream.py` is the reference generator, committed
+verbatim, and it picks event types *uniformly at random* — so roughly a third of
+its feed is a fire alarm or panic button and the board becomes a wall of red.
+`scripts/loadgen.py` uses the same schema with realistic weights, which produces
+about **5% critical, 48% warning, 48% info** — noise with the occasional real
+emergency buried in it. That is the problem this system exists to solve, so it
+is the better demo. Both work.
 
 To use a real LLM, set the key and pick a provider:
 
@@ -320,6 +339,47 @@ Duplicates are cheap, gaps are not. (`tests/test_api.py` pins this.)
 
 ---
 
+## The dashboard
+
+The design borrows from alarm annunciator panels — the backlit legend boards in
+real fire and security installations. Red for alarm, amber for trouble, and a
+lit lamp on the edge of every card. Severity *is* the information here, so the
+colour system is the interface rather than decoration. Type is IBM Plex, drawn
+for technical systems, with tabular numerals so confidence values, latencies,
+and timestamps line up column-wise and can be compared at a glance.
+
+**Critical alarms cannot be missed.** A pulsing banner counts what is
+outstanding and links to the newest one, a two-tone chirp plays for each new
+critical (synthesised, mutable, and never fired for anything else — an alert
+that goes off for everything trains people to ignore it), and criticals sort to
+the top. The banner deliberately ignores the active filters: a filter is a
+convenience and must not be able to hide an emergency.
+
+**The two-stage triage is visible.** An alarm appears instantly badged
+`Rules · AI pending`, and when the model's verdict lands the card flares briefly
+and the badge becomes `AI deepseek-flash · 0.8s`. Watching that happen is the
+clearest explanation of the architecture. Every card also says which brain
+produced its verdict, because an operator acting on a `Fallback · AI
+unavailable` verdict should know the AI was down, and one looking at
+`Rules only · no AI cost` should know no model was consulted and none was
+needed.
+
+**Other operator-facing details:** `AI overrode rules` marks disagreements with
+the baseline; `likely false positive` is called out explicitly; acknowledged
+alarms dim and resolved ones sink; the instrument strip carries throughput,
+queue depth, shed count, p50/p95, degraded count, override rate, cache hit rate,
+and spend. Actions apply optimistically so a click feels instant, with SSE as
+the source of truth.
+
+Two connection states are shown separately, because they fail independently:
+*Dashboard linked* (this browser to the backend) and *Event feed live* (the
+backend to the alarm stream).
+
+Responsive to 420px, keyboard focus visible, and all motion disabled under
+`prefers-reduced-motion` — a control room runs for hours.
+
+---
+
 ## API
 
 | Method | Path | Purpose |
@@ -371,8 +431,14 @@ backend/
     schema.py          structured-output schema + response validation
     factory.py         provider selection
     worker.py          bounded-concurrency triage workers
-scripts/loadgen.py     burst event generator
+frontend/
+  src/App.tsx            board state, filters, operator actions
+  src/useAlarmStream.ts  SSE subscription and verdict-landing detection
+  src/components/        status rail, banner, instrument strip, alarm card
+  src/lib/               severity ordering, formatting, tone synthesis
+scripts/loadgen.py     burst event generator with a realistic event mix
 scripts/mock_openai.py local OpenAI stand-in with injectable failures
+scripts/shoot.py       screenshot the running dashboard
 stream.py          reference generator, supplied with the brief, verbatim
 ```
 
@@ -385,8 +451,9 @@ stream.py          reference generator, supplied with the brief, verbatim
 - [x] **Phase 2 — AI triage.** DeepSeek + OpenAI behind one adapter, structured
       output with validation, timeout/retry/circuit breaker, cache-aware cost
       and override tracking. 145 tests at 94% coverage.
-- [ ] **Phase 3 — operator dashboard.** React + Tailwind, live board, critical
-      banner, acknowledge/resolve, health strip.
+- [x] **Phase 3 — operator dashboard.** React + Tailwind over SSE, live
+      severity-ranked board, critical banner with alert tone, acknowledge and
+      resolve, instrument strip. 20 frontend tests.
 - [ ] **Phase 4 — video worker.** Frame sampling off the hot path, motion/YOLO
       detection emitting into the same pipeline.
 - [ ] **Phase 5 — correlation & escalation.** Sliding-window patterns per site.
@@ -395,8 +462,11 @@ stream.py          reference generator, supplied with the brief, verbatim
 
 Recorded honestly rather than hidden:
 
-- **No dashboard yet.** Phase 3. Today the live surface is the SSE endpoint and
-  the JSON API; the metrics below were read with `curl`.
+- **Dashboard tests cover logic, not rendering.** Board ordering and formatting
+  are unit-tested; the components themselves were verified by screenshotting the
+  running app rather than with a component test harness. The ordering test
+  exists specifically because it duplicates `sort_key` on the server and the two
+  must not drift.
 - **Cost is an estimate.** Rates live in a table in
   `triage/openai_compatible.py` and drift; DeepSeek also halves them off-peak
   and we quote peak, so the figure over-estimates by design. Override with

@@ -12,11 +12,13 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.config import Settings, load_settings
 from backend.runtime import SentinelRuntime
@@ -28,6 +30,7 @@ router = APIRouter(prefix="/api")
 DEFAULT_OPERATOR = "operator"
 # Vite dev server; the built dashboard is served same-origin in production.
 DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
 def _sse(event: str, payload: Any) -> str:
@@ -156,5 +159,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
+    _mount_dashboard(app)
     return app
+
+
+def _mount_dashboard(app: FastAPI) -> None:
+    """Serve the built dashboard from the API process when it exists.
+
+    One command to run the whole thing for a demo. During development the Vite
+    dev server proxies /api here instead, so this simply does nothing until
+    `npm run build` has been run.
+    """
+    index = DASHBOARD_DIR / "index.html"
+    if not index.is_file():
+        logger.info("dashboard build not found at %s; serving API only", DASHBOARD_DIR)
+        return
+
+    app.mount("/assets", StaticFiles(directory=DASHBOARD_DIR / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def dashboard() -> FileResponse:
+        return FileResponse(index)
+
+    logger.info("dashboard served at http://%s:%s/", "127.0.0.1", "8000")
 

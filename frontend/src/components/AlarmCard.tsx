@@ -105,6 +105,11 @@ function AlarmCardBase({
             <Badge title="Detector confidence reported with the event.">
               {confidencePct(event.confidence)}
             </Badge>
+            {event.source === "camera" && (
+              <Badge title="Detected by the camera worker from live video, not a sensor.">
+                camera
+              </Badge>
+            )}
             {triage.overrode_baseline && (
               <Badge
                 tone="info"

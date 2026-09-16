@@ -15,8 +15,11 @@ frontend/*.tsbuildinfo
 # Secrets
 .env
 
-# Media (large; fetched by scripts/fetch_sample_video.sh)
+# Media - demo_camera.mp4 is committed on purpose (synthetic, ~3MB,
+# reproducible via scripts/generate_demo_video.py); anything else you drop
+# in assets/ locally stays untracked.
 assets/*.mp4
+!assets/demo_camera.mp4
 
 # OS
 .DS_Store

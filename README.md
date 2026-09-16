@@ -7,8 +7,9 @@ critical situations are impossible to miss.
 
 Built for the Monitex AI & Systems Developer technical assessment.
 
-> **Status: Phase 3 of 5 complete** — ingest, AI triage, and the operator
-> dashboard all run end to end. See [Roadmap](#roadmap) for what remains.
+> **Status: Phase 4 of 5 complete** — ingest, AI triage, the dashboard, and a
+> live camera worker all run end to end. See [Roadmap](#roadmap) for what
+> remains.
 
 ![The operator dashboard under a live feed](docs/dashboard.png)
 
@@ -380,6 +381,68 @@ Responsive to 420px, keyboard focus visible, and all motion disabled under
 
 ---
 
+## The camera worker
+
+A background task samples a looping video feed, runs motion detection, and
+calls `EventIntake.accept()` — the exact same door the WebSocket feed uses.
+That sharing is the point: a camera detection is triaged, ranked, and
+escalated by identical code to a sensor alarm, with no second path to keep
+in sync.
+
+**Off the hot path, concretely.** Every blocking call — opening the source,
+reading a frame — runs via `loop.run_in_executor`, never inline on the event
+loop. `tests/test_video_worker.py::test_decode_latency_never_reaches_the_event_loop`
+makes this a measured claim rather than an assumption: it simulates a 300ms
+decode and, while the worker runs against it, measures the jitter of an
+unrelated 20ms asyncio timer. Worst observed gap stays under 50ms — if frame
+reads happened on the loop instead of a thread, every tick would stall for up
+to 300ms.
+
+**Detection: frame differencing, deliberately simple.** Consecutive grayscale
+frames are diffed; if enough pixels changed, it's motion. No object
+classification — this can't tell a person from a cat, only that something
+moved — which is an honest MVP scope, not an accident. The interesting design
+problem here is calibration and debouncing, and there was a real bug in both,
+each caught by running the worker against real footage rather than trusting
+the unit tests alone:
+
+- **First cut of the demo clip used ffmpeg's `drawbox` filter with a
+  time-varying position.** It silently drew nothing — this ffmpeg build
+  (9.0.1) has a bug where `x`/`y` expressions referencing `t` or `n` never
+  re-evaluate per frame. A constant expression rendered; one that read the
+  time variable didn't, for the entire clip, with no error. Rewritten in pure
+  OpenCV/numpy instead, which sidesteps the bug and was the right tool anyway:
+  this footage is only ever read back by this project's own worker, never
+  embedded in a browser `<video>` tag, so there was never a reason to round-trip
+  through ffmpeg or care about H.264 compatibility.
+
+- **The debounce was a raw timer** (`now - last_emitted_at >= cooldown_s`),
+  which re-arms mid-episode if a motion pass outlasts the cooldown. Running it
+  against the real clip surfaced it immediately: one 8-second pass produced
+  three separate alarms instead of one, directly contradicting the worker's
+  own stated design ("an operator does not want fifteen cards for one person
+  crossing a lobby"). Replaced with `MotionDebouncer`, which is edge-triggered
+  — it fires once when motion starts and stays quiet for the rest of that
+  episode, however long it runs, rather than re-arming on a clock. Verified
+  against the real clip afterward: exactly 3 alarms per 40-second loop,
+  including across the file's loop boundary.
+
+**The demo clip itself** (`assets/demo_camera.mp4`, ~3MB, committed) is
+synthetic and reproducible via `scripts/generate_demo_video.py` — a dim
+loading-dock background with three scripted passes of a lighter box crossing
+the frame, so the detector's output can be checked against known ground truth
+instead of eyeballing real footage. Quiet windows diff to exactly 0.0 after
+blur; motion windows never drop below 0.011 — a wide, deliberately generous
+margin around the 0.006 detection threshold.
+
+Confidence is mapped from the changed-pixel fraction into the same 0.35–0.99
+range every other detector in this system reports (see `stream.py`'s own
+generator), so a camera-sourced alarm doesn't read as suspiciously more or
+less certain than a sensor one for reasons that have nothing to do with the
+actual signal.
+
+---
+
 ## API
 
 | Method | Path | Purpose |
@@ -431,11 +494,16 @@ backend/
     schema.py          structured-output schema + response validation
     factory.py         provider selection
     worker.py          bounded-concurrency triage workers
+  video/
+    motion.py         frame-diff detector + edge-triggered debouncer (pure numpy)
+    capture.py        blocking cv2.VideoCapture wrapper, meant for a thread
+    worker.py         samples frames off the hot path, emits into intake
 frontend/
   src/App.tsx            board state, filters, operator actions
   src/useAlarmStream.ts  SSE subscription and verdict-landing detection
   src/components/        status rail, banner, instrument strip, alarm card
-  src/lib/               severity ordering, formatting, tone synthesis
+  src/lib/                severity ordering, formatting, tone synthesis
+scripts/generate_demo_video.py  regenerates assets/demo_camera.mp4
 scripts/loadgen.py     burst event generator with a realistic event mix
 scripts/mock_openai.py local OpenAI stand-in with injectable failures
 scripts/shoot.py       screenshot the running dashboard
@@ -454,8 +522,9 @@ stream.py          reference generator, supplied with the brief, verbatim
 - [x] **Phase 3 — operator dashboard.** React + Tailwind over SSE, live
       severity-ranked board, critical banner with alert tone, acknowledge and
       resolve, instrument strip. 20 frontend tests.
-- [ ] **Phase 4 — video worker.** Frame sampling off the hot path, motion/YOLO
-      detection emitting into the same pipeline.
+- [x] **Phase 4 — video worker.** Frame-diff detection off the hot path,
+      edge-triggered debounce, emitting into the same pipeline as sensor
+      alarms. 26 tests.
 - [ ] **Phase 5 — correlation & escalation.** Sliding-window patterns per site.
 
 ## Known gaps
@@ -477,6 +546,20 @@ Recorded honestly rather than hidden:
 - **No persistence.** The store is an in-memory ring buffer; restarting loses
   history. Deliberate for a monitoring surface, and the interface is ready for
   a SQLite backing store.
+- **Frame differencing has a known blind spot.** It compares consecutive
+  frames, not a rolling background model, so an object that stops moving and
+  stays in frame stops registering as motion. `cv2.createBackgroundSubtractorMOG2`
+  would fix this; out of scope for the MVP detector here.
+- **No object classification.** The camera worker knows something moved, not
+  what it was — always emits `motion_detected`, never `object_detected` or a
+  species/class label. A hosted vision API or YOLO would be the next step
+  (the brief's own "deeper vision" stretch goal).
+- **Video sampling isn't synced to the source's native frame rate.** Frames
+  are consumed sequentially at the configured sample rate rather than paced to
+  wall-clock video time, so a file source can appear to play in slow motion
+  relative to its nominal length. Doesn't affect detection correctness — the
+  three motion passes are still ordered and separated correctly — only demo
+  pacing. A live camera source doesn't have this issue at all: it paces itself.
 - **No auth.** The dashboard is unauthenticated and binds to localhost.
 - **`stream.py` is committed verbatim**, including its deprecated
   `datetime.utcnow()`, so the reviewer can reproduce the feed exactly.

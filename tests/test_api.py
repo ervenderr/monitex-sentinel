@@ -29,6 +29,7 @@ def app_settings() -> Settings:
         metrics_interval_s=0.05,
         reconnect_initial_s=0.05,
         reconnect_max_s=0.1,
+        video_enabled=False,  # this file tests the API surface, not video capture
     )
 
 

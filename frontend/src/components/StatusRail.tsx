@@ -53,6 +53,15 @@ export function StatusRail({ link, metrics, health, soundEnabled, onToggleSound 
             {circuit !== "closed" && ` · circuit ${circuit.replace("_", "-")}`}
           </span>
         </span>
+
+        {metrics && (
+          <span className="flex items-center gap-1.5">
+            <Lamp on={metrics.video_connected} tone="bg-live" />
+            <span className={metrics.video_connected ? "text-ink-dim" : "text-ink-faint"}>
+              {metrics.video_connected ? "Camera live" : "Camera off"}
+            </span>
+          </span>
+        )}
       </div>
 
       <button

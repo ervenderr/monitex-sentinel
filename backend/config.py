@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # against realistic LLM latency without spending anything on tokens.
     stub_latency_ms: float = Field(default=0.0, ge=0)
 
+    # ---- video worker ----
+    video_enabled: bool = True
+    video_source: str = "assets/demo_camera.mp4"
+    video_site_id: str = "site-100"
+    video_zone: str = "loading-dock"
+    video_sample_fps: float = Field(default=4.0, gt=0)
+    video_cooldown_s: float = Field(default=4.0, gt=0)
+    video_pixel_threshold: int = Field(default=18, gt=0, le=255)
+    video_area_threshold: float = Field(default=0.006, gt=0, lt=1)
+
     # ---- api ----
     host: str = "127.0.0.1"
     port: int = Field(default=8000, gt=0, le=65535)

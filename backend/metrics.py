@@ -43,6 +43,9 @@ class MetricsSnapshot(BaseModel):
     cost_usd: float
     stream_connected: bool
     stream_reconnects: int
+    video_connected: bool
+    video_frames_sampled: int
+    video_events_emitted: int
 
 
 def _percentile(sorted_samples: list[float], fraction: float) -> float:
@@ -71,6 +74,9 @@ class Metrics:
         self._circuit_state: Callable[[], str] = lambda: "closed"
         self.stream_connected = False
         self.stream_reconnects = 0
+        self.video_connected = False
+        self.video_frames_sampled = 0
+        self.video_events_emitted = 0
 
         self._latencies: deque[float] = deque(maxlen=LATENCY_SAMPLE_SIZE)
         self._arrivals: deque[float] = deque()
@@ -148,4 +154,7 @@ class Metrics:
             cost_usd=round(self.cost_usd, 6),
             stream_connected=self.stream_connected,
             stream_reconnects=self.stream_reconnects,
+            video_connected=self.video_connected,
+            video_frames_sampled=self.video_frames_sampled,
+            video_events_emitted=self.video_events_emitted,
         )

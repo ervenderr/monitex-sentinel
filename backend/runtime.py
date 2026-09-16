@@ -18,6 +18,7 @@ from backend.store import AlarmStore
 from backend.triage.base import TriageProvider
 from backend.triage.factory import build_provider
 from backend.triage.worker import triage_worker
+from backend.video.worker import video_worker
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,21 @@ class SentinelRuntime:
                 name="ingest",
             )
         )
+        if self.settings.video_enabled:
+            self._tasks.append(
+                asyncio.create_task(
+                    video_worker(
+                        source=self.settings.video_source,
+                        site_id=self.settings.video_site_id,
+                        zone=self.settings.video_zone,
+                        intake=self.intake,
+                        metrics=self.metrics,
+                        sample_interval_s=1.0 / self.settings.video_sample_fps,
+                        cooldown_s=self.settings.video_cooldown_s,
+                    ),
+                    name="video",
+                )
+            )
         logger.info(
             "sentinel runtime started: %d triage workers, queue capacity %d",
             self.settings.triage_workers,

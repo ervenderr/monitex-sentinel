@@ -73,6 +73,9 @@ export interface Metrics {
   cost_usd: number;
   stream_connected: boolean;
   stream_reconnects: number;
+  video_connected: boolean;
+  video_frames_sampled: number;
+  video_events_emitted: number;
 }
 
 export interface Health {

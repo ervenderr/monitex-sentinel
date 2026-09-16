@@ -28,6 +28,7 @@ def settings() -> Settings:
         triage_workers=2,
         store_capacity=100,
         llm_provider="stub",  # replaced below with a mocked real provider
+        video_enabled=False,  # this file tests triage, not video capture
     )
 
 

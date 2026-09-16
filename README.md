@@ -7,9 +7,9 @@ critical situations are impossible to miss.
 
 Built for the Monitex AI & Systems Developer technical assessment.
 
-> **Status: Phase 1 of 5 complete** — the pipeline spine runs end to end.
-> Triage currently uses the deterministic stub provider; the OpenAI adapter
-> lands in Phase 2. See [Roadmap](#roadmap) for what is and is not built yet.
+> **Status: Phase 2 of 5 complete** — pipeline and AI triage both run end to
+> end. The dashboard is still Phase 3; today the live surface is SSE + JSON.
+> See [Roadmap](#roadmap) for what is and is not built yet.
 
 ---
 
@@ -28,6 +28,27 @@ cp .env.example .env
 # 3. start the service (terminal 2)
 .venv/bin/python -m backend.main
 ```
+
+To use the real LLM, set the key and switch the provider:
+
+```bash
+export OPENAI_API_KEY=sk-...
+SENTINEL_LLM_PROVIDER=openai .venv/bin/python -m backend.main
+```
+
+Without a key you can still exercise the entire production code path — real
+provider class, real retries, real circuit breaker — against a local mock:
+
+```bash
+.venv/bin/python scripts/mock_openai.py --latency-ms 400        # terminal 3
+SENTINEL_LLM_PROVIDER=openai SENTINEL_LLM_BASE_URL=http://localhost:8900/v1 \
+  OPENAI_API_KEY=sk-local .venv/bin/python -m backend.main
+```
+
+The mock can inject failures on demand (`--fail-rate`, `--rate-limit-rate`,
+`--junk-rate`), which is how the numbers in
+[Behaviour when the LLM misbehaves](#behaviour-when-the-llm-misbehaves) were
+produced.
 
 Then:
 
@@ -97,6 +118,81 @@ Two further consequences:
 - **The fallback is already written.** When the LLM times out, rate-limits, or
   returns junk, the same rule engine produces the verdict, flagged `degraded`.
   The operator sees a ranked alarm with a recommended action, never an error.
+
+### The AI layer
+
+`gpt-4o-mini` over the HTTP API with `httpx`, deliberately rather than the SDK:
+the timeout, retry, and breaker behaviour is the interesting part and it should
+be legible in one file instead of buried in a vendor library's defaults. The
+provider sits behind a `TriageProvider` protocol, so swapping it is one line in
+`triage/factory.py`.
+
+**Structured output.** The response uses a `strict` JSON schema, so the model
+cannot return prose. It is still validated on arrival with Pydantic — casing
+drift is normalised, unknown severities are rejected, empty fields are rejected,
+and long fields are truncated. "The API guarantees it" is not something to rely
+on when the alternative is an operator staring at a blank alarm.
+
+**The model gets the rule verdict as a baseline.** It encodes site policy the
+model cannot infer and gives it something to react to rather than guess from
+cold. The model is told it may override, and disagreements are tracked as
+`llm_overrides`: a model that never overrides is not earning its cost, and one
+that always overrides is miscalibrated. Observed override rate on the mock feed
+is 10–20%.
+
+**Event content is untrusted.** `metadata` and `zone` come from cameras and
+third-party sensors and are attacker-influenceable. They are fenced inside an
+`<event>` block, truncated, and the system prompt says not to take instructions
+from them.
+
+**Cost.** ~354 input and ~80 output tokens per event, about **$0.0001 per
+event** on `gpt-4o-mini`. Measured: $0.002 for 21 events. Fast-path alarms cost
+nothing at all. The dashboard carries a running total.
+
+### Failure handling, cheapest first
+
+| Condition | Behaviour |
+|---|---|
+| Circuit open | Never calls the API. Instant rule fallback. |
+| `401` / `400` / `404` | Fails immediately — a bad key will not fix itself. |
+| `429` / `5xx` / timeout / network | Bounded retries, exponential backoff with jitter, honours `Retry-After`. |
+| Malformed or schema-violating output | Treated as failure, never passed through. |
+| Anything else | Rule fallback, flagged `degraded` in the UI. |
+
+Every path ends in a ranked, actionable verdict. There is no branch where an
+operator gets an error instead of an alarm.
+
+The circuit breaker matters more than it looks. Without it, a dead provider
+makes *every* alarm pay the full timeout before falling back, the queue backs
+up, and the board goes stale — the failure spreads from the AI layer into the
+thing that has to keep working.
+
+### Behaviour when the LLM misbehaves
+
+Measured against the mock, live:
+
+**80% of responses failing** (40% `500`, 20% `429`, 20% malformed-with-`200`):
+
+```
+llm_calls 48   llm_failures 4   p50 305ms   p95 1288ms
+board: every alarm has a summary and a recommended action
+```
+
+Retries absorbed all but 4. The breaker correctly stayed closed — failures were
+not *consecutive*.
+
+**Provider 100% down:**
+
+```
+events_ingested 91   events_triaged 91   llm_degraded 27   circuit: open
+```
+
+Every event still got a verdict. The decisive check: a freshly started mock
+reported `{"calls": 0}` while the breaker was open — the open circuit stopped
+touching the network entirely rather than merely discarding the results.
+
+**Provider recovers:** the circuit closed on its own and LLM verdicts resumed
+with no restart and no intervention.
 
 ### Severity is not a lookup table
 
@@ -206,11 +302,16 @@ backend/
   runtime.py       composition root
   api.py           HTTP + SSE surface
   triage/
-    rules.py       deterministic classifier (preliminary/fast-path/fallback)
-    base.py        provider protocol + stub
-    factory.py     provider selection
-    worker.py      bounded-concurrency triage workers
-scripts/loadgen.py burst generator
+    rules.py           deterministic classifier (preliminary/fast-path/fallback)
+    base.py            provider protocol + stub
+    openai_provider.py OpenAI adapter: retries, breaker, cost
+    circuit.py         circuit breaker state machine
+    prompt.py          prompt construction
+    schema.py          structured-output schema + response validation
+    factory.py         provider selection
+    worker.py          bounded-concurrency triage workers
+scripts/loadgen.py     burst event generator
+scripts/mock_openai.py local OpenAI stand-in with injectable failures
 stream.py          reference generator, supplied with the brief, verbatim
 ```
 
@@ -219,9 +320,10 @@ stream.py          reference generator, supplied with the brief, verbatim
 ## Roadmap
 
 - [x] **Phase 1 — pipeline spine.** Ingest, backpressure, store, SSE, operator
-      actions, 76 tests at 93% coverage.
-- [ ] **Phase 2 — AI triage.** OpenAI `gpt-4o-mini` adapter, structured output,
-      timeout/retry/circuit breaker, cost tracking.
+      actions.
+- [x] **Phase 2 — AI triage.** OpenAI `gpt-4o-mini` adapter, structured output,
+      validation, timeout/retry/circuit breaker, cost and override tracking.
+      124 tests at 94% coverage.
 - [ ] **Phase 3 — operator dashboard.** React + Tailwind, live board, critical
       banner, acknowledge/resolve, health strip.
 - [ ] **Phase 4 — video worker.** Frame sampling off the hot path, motion/YOLO
@@ -232,8 +334,13 @@ stream.py          reference generator, supplied with the brief, verbatim
 
 Recorded honestly rather than hidden:
 
-- **Triage is the stub provider.** The seam is real and the worker, fallback,
-  and failure paths are tested against it; the OpenAI call itself is Phase 2.
+- **No dashboard yet.** Phase 3. Today the live surface is the SSE endpoint and
+  the JSON API; the metrics below were read with `curl`.
+- **Cost is an estimate.** Token prices are a constant in
+  `triage/openai_provider.py` and drift over time; the figure is labelled as an
+  estimate rather than billed truth.
+- **No prompt caching or batching.** At one event/sec it would not pay for
+  itself. At real volume the system prompt is the obvious thing to cache.
 - **No persistence.** The store is an in-memory ring buffer; restarting loses
   history. Deliberate for a monitoring surface, and the interface is ready for
   a SQLite backing store.

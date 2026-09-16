@@ -154,6 +154,12 @@ class TriageResult(BaseModel):
     model: str | None = None
     latency_ms: float = 0.0
     cost_usd: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    # True when the model disagreed with the rule baseline. Tracked because a
+    # model that never overrides is not earning its cost, and one that always
+    # overrides is miscalibrated.
+    overrode_baseline: bool = False
 
     @property
     def rank(self) -> int:

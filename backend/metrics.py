@@ -32,6 +32,10 @@ class MetricsSnapshot(BaseModel):
     llm_skipped_fast_path: int
     llm_failures: int
     llm_degraded: int
+    llm_overrides: int
+    llm_tokens_in: int
+    llm_tokens_out: int
+    llm_circuit_state: str
     triage_latency_p50_ms: float
     triage_latency_p95_ms: float
     cost_usd: float
@@ -57,7 +61,11 @@ class Metrics:
         self.llm_skipped_fast_path = 0
         self.llm_failures = 0
         self.llm_degraded = 0
+        self.llm_overrides = 0
+        self.llm_tokens_in = 0
+        self.llm_tokens_out = 0
         self.cost_usd = 0.0
+        self._circuit_state: Callable[[], str] = lambda: "closed"
         self.stream_connected = False
         self.stream_reconnects = 0
 
@@ -75,10 +83,25 @@ class Metrics:
         self._arrivals.append(monotonic())
         self._prune_arrivals()
 
-    def record_triaged(self, latency_ms: float, cost_usd: float) -> None:
+    def bind_circuit(self, state: Callable[[], str]) -> None:
+        self._circuit_state = state
+
+    def record_triaged(
+        self,
+        latency_ms: float,
+        cost_usd: float,
+        *,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        overrode_baseline: bool = False,
+    ) -> None:
         self.events_triaged += 1
         self._latencies.append(latency_ms)
         self.cost_usd += cost_usd
+        self.llm_tokens_in += tokens_in
+        self.llm_tokens_out += tokens_out
+        if overrode_baseline:
+            self.llm_overrides += 1
 
     def _prune_arrivals(self) -> None:
         cutoff = monotonic() - THROUGHPUT_WINDOW_S
@@ -105,6 +128,10 @@ class Metrics:
             llm_skipped_fast_path=self.llm_skipped_fast_path,
             llm_failures=self.llm_failures,
             llm_degraded=self.llm_degraded,
+            llm_overrides=self.llm_overrides,
+            llm_tokens_in=self.llm_tokens_in,
+            llm_tokens_out=self.llm_tokens_out,
+            llm_circuit_state=self._circuit_state(),
             triage_latency_p50_ms=round(_percentile(samples, 0.50), 1),
             triage_latency_p95_ms=round(_percentile(samples, 0.95), 1),
             cost_usd=round(self.cost_usd, 6),

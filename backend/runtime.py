@@ -36,6 +36,9 @@ class SentinelRuntime:
         )
         self.provider = provider or build_provider(settings)
         self.metrics.bind_queue(self.pipeline.depth, self.pipeline.capacity)
+        circuit_state = getattr(self.provider, "circuit_state", None)
+        if circuit_state is not None:
+            self.metrics.bind_circuit(lambda: getattr(self.provider, "circuit_state", "closed"))
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -75,4 +78,8 @@ class SentinelRuntime:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+
+        aclose = getattr(self.provider, "aclose", None)
+        if aclose is not None:
+            await aclose()
         logger.info("sentinel runtime stopped")

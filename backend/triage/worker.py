@@ -44,7 +44,13 @@ async def _triage_one(
     latency_ms = (perf_counter() - started) * 1000
 
     final = result.model_copy(update={"latency_ms": round(latency_ms, 1)})
-    metrics.record_triaged(latency_ms=latency_ms, cost_usd=final.cost_usd)
+    metrics.record_triaged(
+        latency_ms=latency_ms,
+        cost_usd=final.cost_usd,
+        tokens_in=final.tokens_in,
+        tokens_out=final.tokens_out,
+        overrode_baseline=final.overrode_baseline,
+    )
 
     # Re-read: the operator may have acknowledged it while the LLM was thinking.
     current = store.get(record.event_id) or record

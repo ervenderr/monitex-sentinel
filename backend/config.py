@@ -14,7 +14,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="SENTINEL_", extra="ignore"
+        env_file=".env",
+        env_prefix="SENTINEL_",
+        extra="ignore",
+        populate_by_name=True,
     )
 
     # ---- pipeline ----
@@ -30,6 +33,12 @@ class Settings(BaseSettings):
 
     # ---- llm ----
     llm_provider: Literal["stub", "openai"] = "stub"
+    # Not SENTINEL_-prefixed: this is the conventional name every tool expects.
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    llm_circuit_threshold: int = Field(default=5, gt=0)
+    llm_circuit_cooldown_s: float = Field(default=30.0, gt=0)
     llm_model: str = "gpt-4o-mini"
     llm_timeout_s: float = Field(default=6.0, gt=0)
     # Emulated think-time for the stub provider. Lets us load-test the queue

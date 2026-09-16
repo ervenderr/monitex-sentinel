@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from backend.config import Settings
+from backend.correlation import CorrelationEngine
 from backend.ingest import ingest_loop
 from backend.intake import EventIntake
 from backend.metrics import Metrics
@@ -33,8 +34,14 @@ class SentinelRuntime:
             backpressure_timeout_s=settings.queue_backpressure_timeout_s,
         )
         self.store = AlarmStore(capacity=settings.store_capacity)
+        self.correlation = CorrelationEngine(
+            threshold=settings.correlation_threshold, window_s=settings.correlation_window_s
+        )
         self.intake = EventIntake(
-            pipeline=self.pipeline, store=self.store, metrics=self.metrics
+            pipeline=self.pipeline,
+            store=self.store,
+            metrics=self.metrics,
+            correlation=self.correlation,
         )
         self.provider = provider or build_provider(settings)
         self.metrics.bind_queue(self.pipeline.depth, self.pipeline.capacity)
@@ -63,6 +70,7 @@ class SentinelRuntime:
                         provider=self.provider,
                         store=self.store,
                         metrics=self.metrics,
+                        correlation=self.correlation,
                     ),
                     name=f"triage-{index}",
                 )

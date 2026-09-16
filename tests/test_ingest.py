@@ -18,8 +18,12 @@ from tests.fake_feed import FakeFeed
 
 
 @pytest.fixture
-def intake(pipeline: EventPipeline, store: AlarmStore, metrics: Metrics) -> EventIntake:
-    return EventIntake(pipeline=pipeline, store=store, metrics=metrics)
+def intake(
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
+) -> EventIntake:
+    return EventIntake(
+        pipeline=pipeline, store=store, metrics=metrics, correlation=correlation
+    )
 
 
 def _start_ingest(url: str, intake: EventIntake, metrics: Metrics) -> asyncio.Task:

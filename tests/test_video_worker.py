@@ -105,8 +105,12 @@ def metrics() -> Metrics:
 
 
 @pytest.fixture
-def intake(pipeline: EventPipeline, store: AlarmStore, metrics: Metrics) -> EventIntake:
-    return EventIntake(pipeline=pipeline, store=store, metrics=metrics)
+def intake(
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
+) -> EventIntake:
+    return EventIntake(
+        pipeline=pipeline, store=store, metrics=metrics, correlation=correlation
+    )
 
 
 async def _run(coro_factory, *, run_for_s: float) -> asyncio.Task:

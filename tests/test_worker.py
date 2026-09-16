@@ -35,10 +35,15 @@ class SlowProvider:
         raise AssertionError("should have been cancelled")
 
 
-async def _run_worker(provider, pipeline, store, metrics, *, settle: float = 0.1):
+async def _run_worker(provider, pipeline, store, metrics, correlation, *, settle: float = 0.1):
     task = asyncio.create_task(
         triage_worker(
-            name="t0", pipeline=pipeline, provider=provider, store=store, metrics=metrics
+            name="t0",
+            pipeline=pipeline,
+            provider=provider,
+            store=store,
+            metrics=metrics,
+            correlation=correlation,
         )
     )
     await asyncio.sleep(settle)
@@ -47,13 +52,13 @@ async def _run_worker(provider, pipeline, store, metrics, *, settle: float = 0.1
 
 
 async def test_happy_path_marks_the_verdict_final(
-    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
 ) -> None:
     record = make_record(event_id="evt_1", type="perimeter_breach", confidence=0.7)
     store.upsert(record)
     await pipeline.submit(record, protected=False)
 
-    await _run_worker(StubProvider(), pipeline, store, metrics)
+    await _run_worker(StubProvider(), pipeline, store, metrics, correlation)
 
     assert store.get("evt_1").triage_state == "final"
     assert metrics.events_triaged == 1
@@ -64,13 +69,13 @@ async def test_happy_path_marks_the_verdict_final(
     "exc", [TimeoutError(), ValueError("bad json"), RuntimeError("429 rate limited")]
 )
 async def test_provider_failure_serves_a_degraded_fallback(
-    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, exc: Exception
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation, exc: Exception
 ) -> None:
     record = make_record(event_id="evt_1", type="door_forced", confidence=0.9)
     store.upsert(record)
     await pipeline.submit(record, protected=False)
 
-    await _run_worker(ExplodingProvider(exc), pipeline, store, metrics)
+    await _run_worker(ExplodingProvider(exc), pipeline, store, metrics, correlation)
 
     result = store.get("evt_1")
     assert result.triage_state == "final", "the alarm must still reach a verdict"
@@ -83,7 +88,7 @@ async def test_provider_failure_serves_a_degraded_fallback(
 
 
 async def test_worker_survives_repeated_failures(
-    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
 ) -> None:
     provider = ExplodingProvider(RuntimeError("down"))
     for index in range(5):
@@ -91,14 +96,14 @@ async def test_worker_survives_repeated_failures(
         store.upsert(record)
         await pipeline.submit(record, protected=False)
 
-    await _run_worker(provider, pipeline, store, metrics, settle=0.2)
+    await _run_worker(provider, pipeline, store, metrics, correlation, settle=0.2)
 
     assert provider.calls == 5, "one bad event must not kill the worker"
     assert all(store.get(f"evt_{i}").triage_state == "final" for i in range(5))
 
 
 async def test_operator_action_during_triage_is_not_clobbered(
-    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
 ) -> None:
     record = make_record(event_id="evt_1", type="perimeter_breach", confidence=0.7)
     store.upsert(record)
@@ -106,7 +111,7 @@ async def test_operator_action_during_triage_is_not_clobbered(
 
     # Operator acknowledges while the (stale) record is in flight.
     store.acknowledge("evt_1", "erven")
-    await _run_worker(StubProvider(), pipeline, store, metrics)
+    await _run_worker(StubProvider(), pipeline, store, metrics, correlation)
 
     result = store.get("evt_1")
     assert result.status == "acknowledged", "triage must not resurrect an acked alarm"
@@ -115,12 +120,12 @@ async def test_operator_action_during_triage_is_not_clobbered(
 
 
 async def test_latency_is_recorded(
-    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
 ) -> None:
     record = make_record(event_id="evt_1")
     store.upsert(record)
     await pipeline.submit(record, protected=False)
-    await _run_worker(StubProvider(), pipeline, store, metrics)
+    await _run_worker(StubProvider(), pipeline, store, metrics, correlation)
 
     assert metrics.snapshot().triage_latency_p95_ms >= 0
     assert store.get("evt_1").triage.latency_ms >= 0

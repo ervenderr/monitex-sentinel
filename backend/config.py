@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # that many consecutive detected frames before an episode starts.
     video_rising_edge_frames: int = Field(default=1, ge=1)
 
+    # ---- correlation / escalation ----
+    correlation_threshold: int = Field(default=3, ge=2)
+    correlation_window_s: float = Field(default=120.0, gt=0)
+
     # ---- api ----
     host: str = "127.0.0.1"
     port: int = Field(default=8000, gt=0, le=65535)

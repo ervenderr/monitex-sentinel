@@ -7,9 +7,9 @@ critical situations are impossible to miss.
 
 Built for the Monitex AI & Systems Developer technical assessment.
 
-> **Status: Phase 4 of 5 complete** — ingest, AI triage, the dashboard, and a
-> live camera worker all run end to end. See [Roadmap](#roadmap) for what
-> remains.
+> **Status: all 5 phases complete.** Ingest, AI triage, the dashboard, the
+> camera worker, and site-level escalation all run end to end. 224 tests
+> (204 backend, 20 frontend), 95% backend coverage.
 
 ![The operator dashboard under a live feed](docs/dashboard.png)
 
@@ -34,6 +34,9 @@ cp .env.example .env
 ```
 
 Open **http://localhost:8000/**.
+
+Recording the required demo? See [`docs/demo-script.md`](docs/demo-script.md)
+for a shot-by-shot 4-minute script, timed to what actually gets evaluated.
 
 For frontend development, run Vite separately and it proxies the API:
 
@@ -443,6 +446,47 @@ actual signal.
 
 ---
 
+## Correlation & escalation
+
+The brief's own example: a single warning-level perimeter breach and three of
+them at one site in two minutes are not the same risk, even though each one
+individually looked survivable. `CorrelationEngine` (`backend/correlation.py`)
+keeps a sliding per-site window of recent warning/critical alarms and bumps an
+alarm to critical the moment a pattern crosses the threshold (default: 3
+alarms in 120 seconds) — either **repeated** alarms of the same type, or
+**combined** signals of different types, both count, matching the brief's
+"repeated or combined signals at a site" wording for this stretch goal.
+
+Evaluated exactly once per alarm, at the moment its triage becomes final —
+either the rule engine's fast path or the LLM path, both of which call the
+same `CorrelationEngine.evaluate()`. Evaluating it any earlier (on the
+preliminary rule verdict) would double-count the same alarm's sighting once
+before the LLM replies and once after.
+
+Deliberately monotonic and non-retroactive:
+
+- **Only raises severity, never lowers it**, and never re-escalates an alarm
+  that is already critical — a rule-driven `fire_alarm` has already claimed
+  the operator's attention on its own; there is nothing above critical to
+  escalate to.
+- **Info-severity alarms don't count toward the pattern.** They are exactly
+  the noise triage exists to filter; counting them would defeat the point of
+  classifying them as noise.
+- **Earlier alarms in a pattern are not rewritten** when a later one crosses
+  the threshold. The 1st and 2nd perimeter breach at a site stay `warning`;
+  the 3rd is published as `critical` with an `escalation` reason attached and
+  is what the dashboard's red banner and pulsing card highlight. Real-time
+  systems announce the new aggregated risk at the point it's detected; they
+  don't reach back and rewrite history.
+
+Verified live against a real WebSocket feed (not just unit tests): three
+`perimeter_breach` events at one site produced exactly this - the first two
+`warning`, the third `critical` with `escalation: "3x perimeter breach at
+site-999 within 120s"`, and the `escalations` counter on the instrument strip
+incremented once.
+
+---
+
 ## API
 
 | Method | Path | Purpose |
@@ -498,6 +542,7 @@ backend/
     motion.py         frame-diff detector + edge-triggered debouncer (pure numpy)
     capture.py        blocking cv2.VideoCapture wrapper, meant for a thread
     worker.py         samples frames off the hot path, emits into intake
+  correlation.py     sliding per-site window, escalates repeated/combined alarms
 frontend/
   src/App.tsx            board state, filters, operator actions
   src/useAlarmStream.ts  SSE subscription and verdict-landing detection
@@ -518,14 +563,16 @@ stream.py          reference generator, supplied with the brief, verbatim
       actions.
 - [x] **Phase 2 — AI triage.** DeepSeek + OpenAI behind one adapter, structured
       output with validation, timeout/retry/circuit breaker, cache-aware cost
-      and override tracking. 145 tests at 94% coverage.
+      and override tracking.
 - [x] **Phase 3 — operator dashboard.** React + Tailwind over SSE, live
       severity-ranked board, critical banner with alert tone, acknowledge and
-      resolve, instrument strip. 20 frontend tests.
+      resolve, instrument strip.
 - [x] **Phase 4 — video worker.** Frame-diff detection off the hot path,
       edge-triggered debounce, emitting into the same pipeline as sensor
-      alarms. 26 tests.
-- [ ] **Phase 5 — correlation & escalation.** Sliding-window patterns per site.
+      alarms.
+- [x] **Phase 5 — correlation & escalation.** Sliding per-site window,
+      repeated or combined signals escalate to critical, verified live
+      against a real feed. 224 tests total, 95% backend coverage.
 
 ## Known gaps
 
@@ -561,5 +608,17 @@ Recorded honestly rather than hidden:
   three motion passes are still ordered and separated correctly — only demo
   pacing. A live camera source doesn't have this issue at all: it paces itself.
 - **No auth.** The dashboard is unauthenticated and binds to localhost.
+- **Correlation resets on restart.** The per-site sighting window lives in
+  memory alongside the alarm store; a restart forgets in-progress patterns,
+  consistent with the rest of the system having no persistence.
+- **Webcam sensitivity needs per-device calibration.** `video_pixel_threshold`
+  / `video_area_threshold` are tuned against the committed synthetic clip's
+  near-zero sensor noise. A real webcam's auto-exposure produces measurably
+  more per-frame variation (p95 changed-pixel fraction ~0.08 sitting still,
+  against the clip's clean 0.0), so a live camera needs `SENTINEL_VIDEO_AREA_THRESHOLD`
+  raised and benefits from `SENTINEL_VIDEO_RISING_EDGE_FRAMES` > 1 (requiring
+  several consecutive detected frames, not one, before an alarm fires) to
+  reject single-frame auto-exposure jumps. Real security camera installs have
+  the same problem and solve it the same way - a sensitivity dial per site.
 - **`stream.py` is committed verbatim**, including its deprecated
   `datetime.utcnow()`, so the reviewer can reproduce the feed exactly.

@@ -15,6 +15,7 @@ import asyncio
 import logging
 from time import perf_counter
 
+from backend.correlation import CorrelationEngine
 from backend.metrics import Metrics
 from backend.pipeline import EventPipeline
 from backend.store import AlarmStore
@@ -24,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _triage_one(
-    record, *, provider: TriageProvider, store: AlarmStore, metrics: Metrics
+    record,
+    *,
+    provider: TriageProvider,
+    store: AlarmStore,
+    metrics: Metrics,
+    correlation: CorrelationEngine,
 ) -> None:
     started = perf_counter()
     metrics.llm_calls += 1
@@ -55,7 +61,12 @@ async def _triage_one(
 
     # Re-read: the operator may have acknowledged it while the LLM was thinking.
     current = store.get(record.event_id) or record
-    store.upsert(current.with_triage(final, state="final"))
+    settled = current.with_triage(final, state="final")
+
+    escalated = correlation.evaluate(settled)
+    if escalated.escalation is not None:
+        metrics.escalations += 1
+    store.upsert(escalated)
 
 
 async def triage_worker(
@@ -65,12 +76,15 @@ async def triage_worker(
     provider: TriageProvider,
     store: AlarmStore,
     metrics: Metrics,
+    correlation: CorrelationEngine,
 ) -> None:
     logger.info("triage worker %s started (provider=%s)", name, provider.name)
     while True:
         record = await pipeline.get()
         try:
-            await _triage_one(record, provider=provider, store=store, metrics=metrics)
+            await _triage_one(
+                record, provider=provider, store=store, metrics=metrics, correlation=correlation
+            )
         except asyncio.CancelledError:
             raise
         except Exception:

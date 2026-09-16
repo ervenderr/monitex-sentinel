@@ -14,8 +14,12 @@ from backend.store import AlarmStore
 
 
 @pytest.fixture
-def intake(pipeline: EventPipeline, store: AlarmStore, metrics: Metrics) -> EventIntake:
-    return EventIntake(pipeline=pipeline, store=store, metrics=metrics)
+def intake(
+    pipeline: EventPipeline, store: AlarmStore, metrics: Metrics, correlation
+) -> EventIntake:
+    return EventIntake(
+        pipeline=pipeline, store=store, metrics=metrics, correlation=correlation
+    )
 
 
 async def test_normal_event_is_visible_before_the_llm_runs(

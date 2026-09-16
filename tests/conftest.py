@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from backend.config import Settings
+from backend.correlation import CorrelationEngine
 from backend.metrics import Metrics
 from backend.models import AlarmRecord, RawEvent
 from backend.pipeline import EventPipeline
@@ -46,6 +47,13 @@ def settings() -> Settings:
 @pytest.fixture
 def metrics() -> Metrics:
     return Metrics()
+
+
+@pytest.fixture
+def correlation() -> CorrelationEngine:
+    # A high threshold by default: most tests are not testing correlation and
+    # must not accidentally trip it.
+    return CorrelationEngine(threshold=50, window_s=120.0)
 
 
 @pytest.fixture

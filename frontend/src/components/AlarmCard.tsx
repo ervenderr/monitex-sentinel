@@ -90,6 +90,12 @@ function AlarmCardBase({
           </span>
         </div>
 
+        {record.escalation && (
+          <p className="mx-3.5 mt-1.5 flex items-center gap-1.5 border border-critical/40 bg-critical-dim/30 px-2 py-1 text-[11px] uppercase tracking-wide text-critical">
+            <span aria-hidden="true">&#9650;</span>
+            Escalated - {record.escalation}
+          </p>
+        )}
         <p className="px-3.5 pt-1.5 text-[13px] leading-snug text-ink">{triage.summary}</p>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 pb-2 pt-1.5">

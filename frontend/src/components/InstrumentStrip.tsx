@@ -86,6 +86,12 @@ export function InstrumentStrip({ metrics }: { metrics: Metrics | null }) {
         title="Estimated, from published token rates. Fast-path alarms cost nothing."
       />
       <Readout label="Skipped AI" value={compactNumber(metrics.llm_skipped_fast_path)} title="Unambiguous alarms resolved by rules alone, at no cost." />
+      <Readout
+        label="Escalated"
+        value={compactNumber(metrics.escalations)}
+        tone={metrics.escalations > 0 ? "warn" : "normal"}
+        title="Alarms bumped to critical by a repeated or combined pattern at one site."
+      />
     </div>
   );
 }

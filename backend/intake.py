@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from backend.correlation import CorrelationEngine
 from backend.metrics import Metrics
 from backend.models import AlarmRecord, RawEvent
 from backend.pipeline import EventPipeline
@@ -29,11 +30,17 @@ from backend.triage import rules
 
 class EventIntake:
     def __init__(
-        self, *, pipeline: EventPipeline, store: AlarmStore, metrics: Metrics
+        self,
+        *,
+        pipeline: EventPipeline,
+        store: AlarmStore,
+        metrics: Metrics,
+        correlation: CorrelationEngine,
     ) -> None:
         self._pipeline = pipeline
         self._store = store
         self._metrics = metrics
+        self._correlation = correlation
 
     async def accept_raw(self, message: str | bytes) -> AlarmRecord | None:
         """Parse one wire message. Malformed input is counted, never fatal."""
@@ -62,9 +69,11 @@ class EventIntake:
             # Unambiguous. Publish as final and spend nothing on an LLM call.
             self._metrics.llm_skipped_fast_path += 1
             self._metrics.record_triaged(latency_ms=0.0, cost_usd=0.0)
-            return self._store.upsert(
-                AlarmRecord(event=event, triage=preliminary, triage_state="final")
-            )
+            final = AlarmRecord(event=event, triage=preliminary, triage_state="final")
+            escalated = self._correlation.evaluate(final)
+            if escalated.escalation is not None:
+                self._metrics.escalations += 1
+            return self._store.upsert(escalated)
 
         record = AlarmRecord(event=event, triage=preliminary, triage_state="preliminary")
         # Visible to the operator before the LLM has said anything.

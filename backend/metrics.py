@@ -46,6 +46,7 @@ class MetricsSnapshot(BaseModel):
     video_connected: bool
     video_frames_sampled: int
     video_events_emitted: int
+    escalations: int
 
 
 def _percentile(sorted_samples: list[float], fraction: float) -> float:
@@ -77,6 +78,7 @@ class Metrics:
         self.video_connected = False
         self.video_frames_sampled = 0
         self.video_events_emitted = 0
+        self.escalations = 0
 
         self._latencies: deque[float] = deque(maxlen=LATENCY_SAMPLE_SIZE)
         self._arrivals: deque[float] = deque()
@@ -157,4 +159,5 @@ class Metrics:
             video_connected=self.video_connected,
             video_frames_sampled=self.video_frames_sampled,
             video_events_emitted=self.video_events_emitted,
+            escalations=self.escalations,
         )

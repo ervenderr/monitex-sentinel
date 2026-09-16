@@ -35,6 +35,8 @@ class MetricsSnapshot(BaseModel):
     llm_overrides: int
     llm_tokens_in: int
     llm_tokens_out: int
+    llm_cached_tokens: int
+    llm_cache_hit_rate: float
     llm_circuit_state: str
     triage_latency_p50_ms: float
     triage_latency_p95_ms: float
@@ -64,6 +66,7 @@ class Metrics:
         self.llm_overrides = 0
         self.llm_tokens_in = 0
         self.llm_tokens_out = 0
+        self.llm_cached_tokens = 0
         self.cost_usd = 0.0
         self._circuit_state: Callable[[], str] = lambda: "closed"
         self.stream_connected = False
@@ -93,6 +96,7 @@ class Metrics:
         *,
         tokens_in: int = 0,
         tokens_out: int = 0,
+        cached_tokens: int = 0,
         overrode_baseline: bool = False,
     ) -> None:
         self.events_triaged += 1
@@ -100,6 +104,7 @@ class Metrics:
         self.cost_usd += cost_usd
         self.llm_tokens_in += tokens_in
         self.llm_tokens_out += tokens_out
+        self.llm_cached_tokens += cached_tokens
         if overrode_baseline:
             self.llm_overrides += 1
 
@@ -131,6 +136,12 @@ class Metrics:
             llm_overrides=self.llm_overrides,
             llm_tokens_in=self.llm_tokens_in,
             llm_tokens_out=self.llm_tokens_out,
+            llm_cached_tokens=self.llm_cached_tokens,
+            llm_cache_hit_rate=(
+                round(self.llm_cached_tokens / self.llm_tokens_in, 3)
+                if self.llm_tokens_in
+                else 0.0
+            ),
             llm_circuit_state=self._circuit_state(),
             triage_latency_p50_ms=round(_percentile(samples, 0.50), 1),
             triage_latency_p95_ms=round(_percentile(samples, 0.95), 1),

@@ -15,7 +15,7 @@ import pytest
 from backend.config import Settings
 from backend.runtime import SentinelRuntime
 from backend.triage.circuit import CircuitBreaker
-from backend.triage.openai_provider import OpenAIProvider
+from backend.triage.openai_compatible import OpenAICompatibleProvider
 from tests.test_openai_provider import _completion
 
 
@@ -32,7 +32,7 @@ def settings() -> Settings:
 
 
 async def _runtime_with(handler, settings: Settings, **kwargs: Any) -> SentinelRuntime:
-    provider = OpenAIProvider(
+    provider = OpenAICompatibleProvider(
         api_key="sk-test",
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         timeout_s=1.0,

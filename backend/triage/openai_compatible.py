@@ -1,8 +1,25 @@
-"""OpenAI adapter for the triage layer.
+"""Adapter for any OpenAI-compatible chat completions API.
 
 Written against the HTTP API with httpx rather than the SDK, deliberately: the
-timeout, retry, and breaker behaviour is the part being judged, and it should be
-visible in one file instead of spread across a vendor library's defaults.
+timeout, retry, and breaker behaviour is the part that matters, and it should be
+visible in one file instead of spread across a vendor library's defaults. It
+also means one adapter covers every OpenAI-shaped provider.
+
+"OpenAI-compatible" is not the same as "identical", and the differences are
+load-bearing. Two knobs absorb them:
+
+* `structured_output` - OpenAI enforces a strict JSON schema server-side.
+  DeepSeek rejects `json_schema` outright ("This response_format type is
+  unavailable now") and offers only `json_object`, which guarantees valid JSON
+  but not the right *shape*. In that mode the schema is described in the prompt
+  instead, and the response validator - which we needed anyway - is what
+  actually holds the contract.
+* `reasoning_effort` - `deepseek-flash` is a reasoning model and spends most of
+  its output budget thinking before it answers. Left alone it burned 333 of 471
+  output tokens on reasoning and took 3.1s; with reasoning disabled the same
+  event takes 1.0s and 126 tokens for the same verdict. Alarm triage is
+  classification under latency pressure, not a reasoning task, and the rule
+  engine already supplies a baseline to react to.
 
 Failure handling, in order of cheapness:
 
@@ -24,8 +41,9 @@ import asyncio
 import json
 import logging
 import random
+from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import ValidationError
@@ -41,35 +59,90 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 
-# USD per 1M tokens. Correct as of the build date; pricing drifts, so the cost
-# strip is an estimate and is labelled as one in the UI.
-PRICING: dict[str, tuple[float, float]] = {
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4.1-mini": (0.40, 1.60),
-    "gpt-4.1-nano": (0.10, 0.40),
+@dataclass(frozen=True)
+class ModelPricing:
+    """USD per 1M tokens. `cached_input` is the discounted repeat-prompt rate."""
+
+    input_per_m: float
+    output_per_m: float
+    cached_input_per_m: float | None = None
+
+
+# Published rates drift, so these are estimates and the UI labels them as such.
+# A model that is not listed reports tokens but no cost rather than inventing a
+# number; override per-deployment with SENTINEL_LLM_PRICE_IN_PER_M /
+# SENTINEL_LLM_PRICE_OUT_PER_M.
+#
+# DeepSeek bills half these rates off-peak (peak is 01:00-04:00 and 06:00-10:00
+# UTC on weekdays). We quote peak, so the cost strip over-estimates rather than
+# under-estimates - the safer direction for a number someone might budget from.
+PRICING: dict[str, ModelPricing] = {
+    "gpt-4o-mini": ModelPricing(0.15, 0.60, cached_input_per_m=0.075),
+    "gpt-4o": ModelPricing(2.50, 10.00, cached_input_per_m=1.25),
+    "gpt-4.1-mini": ModelPricing(0.40, 1.60, cached_input_per_m=0.10),
+    "gpt-4.1-nano": ModelPricing(0.10, 0.40, cached_input_per_m=0.025),
+    "deepseek-flash": ModelPricing(0.30, 1.20, cached_input_per_m=0.006),
+    "deepseek-v4-pro": ModelPricing(1.32, 3.96, cached_input_per_m=0.044),
 }
-DEFAULT_PRICING = (0.15, 0.60)
 
 RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 MAX_BACKOFF_S = 8.0
 # Deterministic-ish output: this is a classification task, not a creative one.
 TEMPERATURE = 0.1
-MAX_OUTPUT_TOKENS = 200
+# Generous because reasoning models spend this budget thinking before they
+# answer; too low truncates the JSON mid-string and every call fails.
+MAX_OUTPUT_TOKENS = 700
+
+StructuredOutputMode = Literal["json_schema", "json_object", "none"]
 
 
 class ProviderError(RuntimeError):
     """Any failure that should result in a degraded, rule-based verdict."""
 
 
-def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
-    price_in, price_out = PRICING.get(model, DEFAULT_PRICING)
-    return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
+def estimate_cost(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    *,
+    cached_tokens: int = 0,
+    price_in_per_m: float | None = None,
+    price_out_per_m: float | None = None,
+) -> float:
+    """Estimated USD for one call. Returns 0.0 when the rate is unknown.
+
+    Reporting zero for an unpriced model is deliberate: a fabricated rate on an
+    operator's cost strip is worse than an honest blank.
+
+    `cached_tokens` is the portion of the input the provider served from its
+    prompt cache. It matters here far more than it looks: our system prompt is
+    identical on every call, so after the first request most of the input bills
+    at the cached rate - for deepseek-flash that is $0.006 against $0.30 per 1M,
+    a 50x difference on the bulk of each request.
+    """
+    if price_in_per_m is not None and price_out_per_m is not None:
+        pricing = ModelPricing(price_in_per_m, price_out_per_m)
+    else:
+        known = PRICING.get(model)
+        if known is None:
+            return 0.0
+        pricing = known
+
+    cached = max(0, min(cached_tokens, tokens_in))
+    uncached = tokens_in - cached
+    cached_rate = (
+        pricing.cached_input_per_m
+        if pricing.cached_input_per_m is not None
+        else pricing.input_per_m
+    )
+    return (
+        uncached * pricing.input_per_m
+        + cached * cached_rate
+        + tokens_out * pricing.output_per_m
+    ) / 1_000_000
 
 
-class OpenAIProvider:
-    name = "openai"
-
+class OpenAICompatibleProvider:
     def __init__(
         self,
         *,
@@ -80,10 +153,22 @@ class OpenAIProvider:
         breaker: CircuitBreaker | None = None,
         client: httpx.AsyncClient | None = None,
         base_url: str = DEFAULT_BASE_URL,
+        name: str = "openai",
+        structured_output: StructuredOutputMode = "json_schema",
+        reasoning_effort: str | None = None,
+        max_output_tokens: int = MAX_OUTPUT_TOKENS,
+        price_in_per_m: float | None = None,
+        price_out_per_m: float | None = None,
     ) -> None:
         if not api_key:
-            raise ValueError("OPENAI_API_KEY is required for the openai provider")
+            raise ValueError("an API key is required for the llm provider")
+        self.name = name
         self._model = model
+        self._structured_output: StructuredOutputMode = structured_output
+        self._reasoning_effort = reasoning_effort
+        self._max_output_tokens = max_output_tokens
+        self._price_in_per_m = price_in_per_m
+        self._price_out_per_m = price_out_per_m
         # Overridable so the stack can run against a local mock, a proxy, or any
         # OpenAI-compatible endpoint (Azure, vLLM, Ollama) without code changes.
         self._url = base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
@@ -112,17 +197,26 @@ class OpenAIProvider:
 
     def _payload(self, event: RawEvent) -> dict[str, Any]:
         baseline_severity, _threat, baseline_reasoning = rules.classify(event)
-        return {
+        payload: dict[str, Any] = {
             "model": self._model,
             "messages": build_messages(
                 event,
                 baseline_severity=baseline_severity,
                 baseline_reasoning=baseline_reasoning,
+                describe_schema=self._structured_output != "json_schema",
             ),
-            "response_format": TRIAGE_JSON_SCHEMA,
             "temperature": TEMPERATURE,
-            "max_tokens": MAX_OUTPUT_TOKENS,
+            "max_tokens": self._max_output_tokens,
         }
+        if self._structured_output == "json_schema":
+            payload["response_format"] = TRIAGE_JSON_SCHEMA
+        elif self._structured_output == "json_object":
+            # Valid JSON guaranteed, correct shape not. The response validator
+            # is what actually enforces the contract here.
+            payload["response_format"] = {"type": "json_object"}
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
+        return payload
 
     async def _post(self, payload: dict[str, Any]) -> httpx.Response:
         """One attempt, with retryable failures raised as ProviderError."""
@@ -161,7 +255,7 @@ class OpenAIProvider:
     # ---- response ---------------------------------------------------------
 
     @staticmethod
-    def _extract(response: httpx.Response) -> tuple[TriageResponse, int, int]:
+    def _extract(response: httpx.Response) -> tuple[TriageResponse, TokenUsage]:
         try:
             body = response.json()
         except ValueError as exc:
@@ -192,11 +286,7 @@ class OpenAIProvider:
             raise ProviderError(f"response failed schema validation: {exc.errors()[:1]}") from exc
 
         usage = body.get("usage") or {}
-        return (
-            verdict,
-            int(usage.get("prompt_tokens") or 0),
-            int(usage.get("completion_tokens") or 0),
-        )
+        return verdict, _usage_tokens(usage)
 
     # ---- public API -------------------------------------------------------
 
@@ -209,7 +299,7 @@ class OpenAIProvider:
         started = perf_counter()
         try:
             response = await self._call_with_retries(self._payload(event))
-            verdict, tokens_in, tokens_out = self._extract(response)
+            verdict, usage = self._extract(response)
         except ProviderError:
             self._breaker.record_failure()
             raise
@@ -230,11 +320,46 @@ class OpenAIProvider:
             degraded=False,
             model=self._model,
             latency_ms=round((perf_counter() - started) * 1000, 1),
-            cost_usd=estimate_cost(self._model, tokens_in, tokens_out),
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
+            cost_usd=estimate_cost(
+                self._model,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                cached_tokens=usage.cached_tokens,
+                price_in_per_m=self._price_in_per_m,
+                price_out_per_m=self._price_out_per_m,
+            ),
+            tokens_in=usage.prompt_tokens,
+            tokens_out=usage.completion_tokens,
+            cached_tokens=usage.cached_tokens,
             overrode_baseline=verdict.severity != baseline_severity,
         )
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+
+
+def _usage_tokens(usage: dict[str, Any]) -> TokenUsage:
+    """Read token counts from either provider's usage shape.
+
+    OpenAI nests cache hits under `prompt_tokens_details.cached_tokens`;
+    DeepSeek reports `prompt_cache_hit_tokens` at the top level.
+    """
+    details = usage.get("prompt_tokens_details") or {}
+    cached = details.get("cached_tokens")
+    if cached is None:
+        cached = usage.get("prompt_cache_hit_tokens")
+    try:
+        return TokenUsage(
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+            cached_tokens=int(cached or 0),
+        )
+    except (TypeError, ValueError):
+        return TokenUsage()
 
 
 class _Retryable(Exception):

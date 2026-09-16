@@ -29,11 +29,11 @@ cp .env.example .env
 .venv/bin/python -m backend.main
 ```
 
-To use the real LLM, set the key and switch the provider:
+To use a real LLM, set the key and pick a provider:
 
 ```bash
-export OPENAI_API_KEY=sk-...
-SENTINEL_LLM_PROVIDER=openai .venv/bin/python -m backend.main
+export DEEPSEEK_API_KEY=sk-...        # or OPENAI_API_KEY
+SENTINEL_LLM_PROVIDER=deepseek .venv/bin/python -m backend.main
 ```
 
 Without a key you can still exercise the entire production code path — real
@@ -121,17 +121,45 @@ Two further consequences:
 
 ### The AI layer
 
-`gpt-4o-mini` over the HTTP API with `httpx`, deliberately rather than the SDK:
-the timeout, retry, and breaker behaviour is the interesting part and it should
-be legible in one file instead of buried in a vendor library's defaults. The
-provider sits behind a `TriageProvider` protocol, so swapping it is one line in
-`triage/factory.py`.
+Currently **DeepSeek `deepseek-flash`**; OpenAI `gpt-4o-mini` is a one-setting
+switch. One adapter (`triage/openai_compatible.py`) serves both, written against
+the HTTP API with `httpx` rather than an SDK — the timeout, retry, and breaker
+behaviour is the interesting part and it should be legible in one file instead
+of buried in a vendor library's defaults. Per-vendor quirks live in
+`triage/presets.py`; the adapter itself has no vendor names in it.
 
-**Structured output.** The response uses a `strict` JSON schema, so the model
-cannot return prose. It is still validated on arrival with Pydantic — casing
-drift is normalised, unknown severities are rejected, empty fields are rejected,
-and long fields are truncated. "The API guarantees it" is not something to rely
-on when the alternative is an operator staring at a blank alarm.
+**"OpenAI-compatible" is not "identical".** Two differences were load-bearing
+enough to shape the design, and both were found by probing the API rather than
+trusting the label:
+
+| | OpenAI | DeepSeek |
+|---|---|---|
+| Strict `json_schema` | supported | **rejected** — `"This response_format type is unavailable now"` |
+| Reasoning tokens | none | `deepseek-flash` thinks before answering |
+
+*Structured output.* Against OpenAI the schema is enforced server-side. DeepSeek
+offers only `json_object`, which guarantees valid JSON but not the right
+*shape* — so in that mode the schema is described in the prompt instead, and the
+response validator is what actually holds the contract. That validator was
+already there, which is the point: casing drift is normalised, unknown
+severities rejected, empty fields rejected, long fields truncated. "The API
+guarantees it" is not worth relying on when the alternative is an operator
+staring at a blank alarm.
+
+*Reasoning.* `deepseek-flash` is a reasoning model, and left alone it spends most
+of its output budget thinking. Measured on one triage event:
+
+| Config | Latency | Output tokens | Verdict |
+|---|---|---|---|
+| default | 3125 ms | 471 (333 reasoning) | critical |
+| `reasoning_effort: none` | **1084 ms** | **126 (0 reasoning)** | critical |
+| `max_tokens: 200` | 1534 ms | truncated mid-JSON | **failed** |
+
+Reasoning is disabled. Alarm triage is classification under latency pressure,
+not a reasoning task, and the rule engine already hands the model a baseline to
+react to — 3× the latency bought nothing. The `max_tokens: 200` row is why the
+default is now 700: a reasoning model silently overruns a tight budget and cuts
+the JSON mid-string, which would have failed *every* call.
 
 **The model gets the rule verdict as a baseline.** It encodes site policy the
 model cannot infer and gives it something to react to rather than guess from
@@ -145,9 +173,22 @@ third-party sensors and are attacker-influenceable. They are fenced inside an
 `<event>` block, truncated, and the system prompt says not to take instructions
 from them.
 
-**Cost.** ~354 input and ~80 output tokens per event, about **$0.0001 per
-event** on `gpt-4o-mini`. Measured: $0.002 for 21 events. Fast-path alarms cost
-nothing at all. The dashboard carries a running total.
+**Cost.** Measured over a live 60-second run on `deepseek-flash`:
+
+```
+49 llm calls   0 failures   p50 960ms   p95 1219ms
+cache hit rate 39%          $0.000178 per call       $0.17 per 1000 events
+```
+
+The cache hit rate is worth the line item. The system prompt is identical on
+every call, so after the first request the provider serves most of the input
+from its prompt cache — **$0.006 per 1M tokens against $0.30**, a 50× difference
+on the bulk of each request. Both providers report it in `usage` (OpenAI nests
+it, DeepSeek does not), so the adapter reads both shapes and bills accordingly.
+
+Fast-path alarms cost nothing at all. Unpriced models report tokens and **no
+cost** rather than a fabricated figure — an honest blank beats a made-up number
+on something an operator might budget from.
 
 ### Failure handling, cheapest first
 
@@ -193,6 +234,25 @@ touching the network entirely rather than merely discarding the results.
 
 **Provider recovers:** the circuit closed on its own and LLM verdicts resumed
 with no restart and no intervention.
+
+### What the model actually adds
+
+Live overrides of the rule baseline, unedited:
+
+> `object_detected` · vehicle · server-room · conf 0.50 → **warning**
+> *"Vehicle in a server room is implausible, suggesting a likely false positive
+> despite the unusual zone"*
+
+> `motion_detected` · server-room · conf 0.48 → **warning** (rules said `info`)
+> *"server-room zone outweighs sub-0.5 confidence, so operator should look
+> within minutes"*
+
+> `glass_break` · lobby · conf 0.85 · 16:00 → **warning** (rules said `critical`)
+> *"High-confidence glass break in lobby during business hours is likely real
+> but not clearly an active intrusion"*
+
+Reasoning over the *combination* of object, zone, confidence, and time is the
+thing a lookup table cannot do. Observed override rate: 13–22%.
 
 ### Severity is not a lookup table
 
@@ -304,7 +364,8 @@ backend/
   triage/
     rules.py           deterministic classifier (preliminary/fast-path/fallback)
     base.py            provider protocol + stub
-    openai_provider.py OpenAI adapter: retries, breaker, cost
+    openai_compatible.py adapter for any OpenAI-shaped API
+    presets.py         per-vendor deviations (DeepSeek, OpenAI)
     circuit.py         circuit breaker state machine
     prompt.py          prompt construction
     schema.py          structured-output schema + response validation
@@ -321,9 +382,9 @@ stream.py          reference generator, supplied with the brief, verbatim
 
 - [x] **Phase 1 — pipeline spine.** Ingest, backpressure, store, SSE, operator
       actions.
-- [x] **Phase 2 — AI triage.** OpenAI `gpt-4o-mini` adapter, structured output,
-      validation, timeout/retry/circuit breaker, cost and override tracking.
-      124 tests at 94% coverage.
+- [x] **Phase 2 — AI triage.** DeepSeek + OpenAI behind one adapter, structured
+      output with validation, timeout/retry/circuit breaker, cache-aware cost
+      and override tracking. 145 tests at 94% coverage.
 - [ ] **Phase 3 — operator dashboard.** React + Tailwind, live board, critical
       banner, acknowledge/resolve, health strip.
 - [ ] **Phase 4 — video worker.** Frame sampling off the hot path, motion/YOLO
@@ -336,11 +397,13 @@ Recorded honestly rather than hidden:
 
 - **No dashboard yet.** Phase 3. Today the live surface is the SSE endpoint and
   the JSON API; the metrics below were read with `curl`.
-- **Cost is an estimate.** Token prices are a constant in
-  `triage/openai_provider.py` and drift over time; the figure is labelled as an
-  estimate rather than billed truth.
-- **No prompt caching or batching.** At one event/sec it would not pay for
-  itself. At real volume the system prompt is the obvious thing to cache.
+- **Cost is an estimate.** Rates live in a table in
+  `triage/openai_compatible.py` and drift; DeepSeek also halves them off-peak
+  and we quote peak, so the figure over-estimates by design. Override with
+  `SENTINEL_LLM_PRICE_IN_PER_M` / `_OUT_PER_M`.
+- **No request batching.** Prompt caching is exploited (39% hit rate measured),
+  but each event is still its own call. At real volume, batching low-severity
+  events would be the next lever.
 - **No persistence.** The store is an in-memory ring buffer; restarting loses
   history. Deliberate for a monitoring surface, and the interface is ready for
   a SQLite backing store.

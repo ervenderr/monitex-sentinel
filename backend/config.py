@@ -32,14 +32,23 @@ class Settings(BaseSettings):
     reconnect_max_s: float = Field(default=15.0, gt=0)
 
     # ---- llm ----
-    llm_provider: Literal["stub", "openai"] = "stub"
-    # Not SENTINEL_-prefixed: this is the conventional name every tool expects.
+    llm_provider: Literal["stub", "openai", "deepseek"] = "stub"
+    # Not SENTINEL_-prefixed: these are the conventional names tools expect.
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    llm_base_url: str = "https://api.openai.com/v1"
+    deepseek_api_key: str = Field(default="", validation_alias="DEEPSEEK_API_KEY")
+    # Empty means "use the provider preset's default".
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    # Per-1M-token rates. Unset means the model's published rate is unknown and
+    # the cost strip reports tokens only, rather than a fabricated figure.
+    llm_price_in_per_m: float | None = None
+    llm_price_out_per_m: float | None = None
+    # Reasoning models spend output budget thinking; see triage/openai_compatible.
+    llm_max_output_tokens: int = Field(default=700, gt=0)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
     llm_circuit_threshold: int = Field(default=5, gt=0)
     llm_circuit_cooldown_s: float = Field(default=30.0, gt=0)
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = ""
     llm_timeout_s: float = Field(default=6.0, gt=0)
     # Emulated think-time for the stub provider. Lets us load-test the queue
     # against realistic LLM latency without spending anything on tokens.

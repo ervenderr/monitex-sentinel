@@ -156,6 +156,7 @@ class TriageResult(BaseModel):
     cost_usd: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
+    cached_tokens: int = 0
     # True when the model disagreed with the rule baseline. Tracked because a
     # model that never overrides is not earning its cost, and one that always
     # overrides is miscalibrated.

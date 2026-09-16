@@ -49,6 +49,7 @@ async def _triage_one(
         cost_usd=final.cost_usd,
         tokens_in=final.tokens_in,
         tokens_out=final.tokens_out,
+        cached_tokens=final.cached_tokens,
         overrode_baseline=final.overrode_baseline,
     )
 

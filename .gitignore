@@ -25,3 +25,6 @@ assets/*.mp4
 .DS_Store
 .coverage
 htmlcov/
+
+# Kept local only, not published
+docs/demo-script.md

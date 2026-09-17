@@ -20,6 +20,7 @@ from backend.triage.base import TriageProvider
 from backend.triage.factory import build_provider
 from backend.triage.worker import triage_worker
 from backend.video.motion import FrameDiffDetector
+from backend.video.preview import FramePublisher
 from backend.video.worker import video_worker
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ class SentinelRuntime:
         self.correlation = CorrelationEngine(
             threshold=settings.correlation_threshold, window_s=settings.correlation_window_s
         )
+        # Always constructed, even if video is disabled - the API route
+        # checks settings.video_enabled itself and answers with a clear 404
+        # rather than the publisher just never receiving a frame.
+        self.video_preview = FramePublisher()
         self.intake = EventIntake(
             pipeline=self.pipeline,
             store=self.store,
@@ -100,6 +105,7 @@ class SentinelRuntime:
                         sample_interval_s=1.0 / self.settings.video_sample_fps,
                         cooldown_s=self.settings.video_cooldown_s,
                         rising_edge_frames=self.settings.video_rising_edge_frames,
+                        preview=self.video_preview,
                     ),
                     name="video",
                 )

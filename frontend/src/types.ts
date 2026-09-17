@@ -84,6 +84,8 @@ export interface Health {
   stream_connected: boolean;
   provider: string;
   subscribers: number;
+  video_enabled: boolean;
+  video_zone: string;
 }
 
 /** Whether the dashboard's own connection to the backend is up - distinct from

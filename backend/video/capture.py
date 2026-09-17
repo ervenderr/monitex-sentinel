@@ -30,6 +30,13 @@ class LoopingVideoCapture:
         self._source = source
         self._frame_size = frame_size
         self._capture = self._open()
+        # The full-colour frame behind the most recent read_gray() call, kept
+        # for the dashboard preview stream. Caching here rather than issuing a
+        # second capture.read() avoids opening a second handle to the same
+        # device - a live webcam backend often only tolerates one - and avoids
+        # desyncing the detector, which compares consecutive frames and would
+        # skip one every time something else also called read().
+        self._last_bgr: np.ndarray | None = None
 
     def _open(self) -> cv2.VideoCapture:
         capture = cv2.VideoCapture(self._source)
@@ -53,9 +60,17 @@ class LoopingVideoCapture:
                     f"video source {self._source!r} produced no frames, even after rewind"
                 )
 
+        self._last_bgr = frame
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, self._frame_size, interpolation=cv2.INTER_AREA)
         return cv2.GaussianBlur(gray, (5, 5), 0)
+
+    @property
+    def last_bgr_frame(self) -> np.ndarray | None:
+        """The full-colour frame behind the most recent read_gray() call, or
+        None before the first read. For preview/display only - detection
+        always works from the grayscale frame read_gray() returns."""
+        return self._last_bgr
 
     def release(self) -> None:
         self._capture.release()

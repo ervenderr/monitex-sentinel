@@ -36,6 +36,7 @@ from backend.intake import EventIntake
 from backend.metrics import Metrics
 from backend.video.capture import LoopingVideoCapture, VideoSourceError
 from backend.video.motion import FrameDiffDetector, MotionDebouncer
+from backend.video.preview import FramePublisher, encode_preview_jpeg
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ async def video_worker(
     rising_edge_frames: int = 1,
     warmup_frames: int = 8,
     reconnect_backoff_s: float = 2.0,
+    preview: FramePublisher | None = None,
 ) -> None:
     loop = asyncio.get_running_loop()
     detector = detector or FrameDiffDetector()
@@ -119,6 +121,12 @@ async def video_worker(
 
             gray = await loop.run_in_executor(None, capture.read_gray)
             metrics.video_frames_sampled += 1
+
+            if preview is not None:
+                bgr = capture.last_bgr_frame
+                if bgr is not None:
+                    jpeg_bytes = await loop.run_in_executor(None, encode_preview_jpeg, bgr)
+                    preview.publish(jpeg_bytes)
 
             reading = detector.update(gray)
             if debouncer.observe(reading.detected, monotonic()):

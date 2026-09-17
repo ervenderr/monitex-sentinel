@@ -9,6 +9,7 @@ import { CriticalBanner } from "./components/CriticalBanner";
 import { InstrumentStrip } from "./components/InstrumentStrip";
 import { FilterBar, type StatusFilter } from "./components/FilterBar";
 import { AlarmBoard } from "./components/AlarmBoard";
+import { CameraPreview } from "./components/CameraPreview";
 
 const ALL_SEVERITIES: Severity[] = ["critical", "warning", "info"];
 const SOUND_KEY = "sentinel.sound";
@@ -114,6 +115,9 @@ export default function App() {
         onToggleSound={toggleSound}
       />
       <CriticalBanner alarms={outstandingCritical} onJump={jumpTo} />
+      {metrics?.video_connected && health?.video_zone && (
+        <CameraPreview zone={health.video_zone} />
+      )}
       <InstrumentStrip metrics={metrics} />
       <FilterBar
         severities={severities}

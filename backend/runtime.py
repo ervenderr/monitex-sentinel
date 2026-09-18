@@ -19,6 +19,7 @@ from backend.store import AlarmStore
 from backend.triage.base import TriageProvider
 from backend.triage.factory import build_provider
 from backend.triage.worker import triage_worker
+from backend.video.control import VideoControl
 from backend.video.motion import FrameDiffDetector
 from backend.video.preview import FramePublisher
 from backend.video.worker import video_worker
@@ -42,6 +43,8 @@ class SentinelRuntime:
         # checks settings.video_enabled itself and answers with a clear 404
         # rather than the publisher just never receiving a frame.
         self.video_preview = FramePublisher()
+        self.video_control = VideoControl()
+        self.metrics.bind_video_control(lambda: self.video_control.paused)
         self.intake = EventIntake(
             pipeline=self.pipeline,
             store=self.store,
@@ -106,6 +109,7 @@ class SentinelRuntime:
                         cooldown_s=self.settings.video_cooldown_s,
                         rising_edge_frames=self.settings.video_rising_edge_frames,
                         preview=self.video_preview,
+                        control=self.video_control,
                     ),
                     name="video",
                 )

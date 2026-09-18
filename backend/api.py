@@ -94,6 +94,20 @@ async def video_preview(request: Request) -> StreamingResponse:
     )
 
 
+@router.post("/video/pause")
+async def pause_video(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    runtime.video_control.pause()
+    return {"video_paused": True}
+
+
+@router.post("/video/resume")
+async def resume_video(request: Request) -> dict[str, Any]:
+    runtime = _runtime(request)
+    runtime.video_control.resume()
+    return {"video_paused": False}
+
+
 @router.post("/alarms/{event_id}/acknowledge")
 async def acknowledge(
     request: Request, event_id: str, by: str = Body(default=DEFAULT_OPERATOR, embed=True)

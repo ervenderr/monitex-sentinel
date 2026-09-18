@@ -76,6 +76,7 @@ export interface Metrics {
   video_connected: boolean;
   video_frames_sampled: number;
   video_events_emitted: number;
+  video_paused: boolean;
   escalations: number;
 }
 

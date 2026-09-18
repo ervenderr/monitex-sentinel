@@ -35,9 +35,6 @@ cp .env.example .env
 
 Open **http://localhost:8000/**.
 
-Recording the required demo? See [`docs/demo-script.md`](docs/demo-script.md)
-for a shot-by-shot 4-minute script, timed to what actually gets evaluated.
-
 For frontend development, run Vite separately and it proxies the API:
 
 ```bash

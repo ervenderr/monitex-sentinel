@@ -8,8 +8,8 @@ critical situations are impossible to miss.
 Built for the Monitex AI & Systems Developer technical assessment.
 
 > **Status: all 5 phases complete.** Ingest, AI triage, the dashboard, the
-> camera worker, site-level escalation, and a live camera preview all run
-> end to end. 232 tests (212 backend, 20 frontend), 94% backend coverage.
+> camera worker, and site-level escalation all run end to end. 224 tests
+> (204 backend, 20 frontend), 95% backend coverage.
 
 ![The operator dashboard under a live feed](docs/dashboard.png)
 
@@ -444,29 +444,6 @@ generator), so a camera-sourced alarm doesn't read as suspiciously more or
 less certain than a sensor one for reasons that have nothing to do with the
 actual signal.
 
-### Live camera preview
-
-The dashboard also shows the camera feed itself, not just the alarms it
-produces - a collapsible panel, top-right, appearing only when the camera is
-actually connected. It's plain MJPEG-over-HTTP: the video worker JPEG-encodes
-each sampled frame off the event loop (`run_in_executor`, same discipline as
-every other blocking call here) and fans it out over `/api/video/preview`;
-the browser side is a single `<img>` tag, no player library, no WebRTC
-signalling - every browser has rendered multipart JPEG natively for decades.
-
-The preview reuses the *same* `cv2.VideoCapture` the motion detector already
-has open rather than opening a second one. That is not just tidiness: a live
-webcam backend often only tolerates one open handle to the device, so a
-second capture could simply fail to open, or silently fight the first one for
-frames.
-
-Its fan-out is deliberately the opposite of the alarm store's. An alarm must
-never be lost to a slow client, so that fan-out queues and preserves order. A
-video frame has the reverse correctness requirement - a client that falls
-behind should skip straight to the newest frame, not build a backlog of stale
-ones and fall further behind. Each preview subscriber's queue holds exactly
-one frame, and a new publish overwrites whatever was waiting.
-
 ---
 
 ## Correlation & escalation
@@ -597,7 +574,7 @@ stream.py          reference generator, supplied with the brief, verbatim
       alarms.
 - [x] **Phase 5 — correlation & escalation.** Sliding per-site window,
       repeated or combined signals escalate to critical, verified live
-      against a real feed. 232 tests total, 94% backend coverage.
+      against a real feed. 224 tests total, 95% backend coverage.
 
 ## Known gaps
 

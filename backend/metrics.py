@@ -46,7 +46,6 @@ class MetricsSnapshot(BaseModel):
     video_connected: bool
     video_frames_sampled: int
     video_events_emitted: int
-    video_paused: bool
     escalations: int
 
 
@@ -80,7 +79,6 @@ class Metrics:
         self.video_frames_sampled = 0
         self.video_events_emitted = 0
         self.escalations = 0
-        self._video_paused: Callable[[], bool] = lambda: False
 
         self._latencies: deque[float] = deque(maxlen=LATENCY_SAMPLE_SIZE)
         self._arrivals: deque[float] = deque()
@@ -98,9 +96,6 @@ class Metrics:
 
     def bind_circuit(self, state: Callable[[], str]) -> None:
         self._circuit_state = state
-
-    def bind_video_control(self, paused: Callable[[], bool]) -> None:
-        self._video_paused = paused
 
     def record_triaged(
         self,
@@ -164,6 +159,5 @@ class Metrics:
             video_connected=self.video_connected,
             video_frames_sampled=self.video_frames_sampled,
             video_events_emitted=self.video_events_emitted,
-            video_paused=self._video_paused(),
             escalations=self.escalations,
         )

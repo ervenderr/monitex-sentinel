@@ -49,8 +49,6 @@ async def health(request: Request) -> dict[str, Any]:
         "stream_connected": runtime.metrics.stream_connected,
         "provider": runtime.provider.name,
         "subscribers": runtime.store.subscriber_count,
-        "video_enabled": runtime.settings.video_enabled,
-        "video_zone": runtime.settings.video_zone,
     }
 
 
@@ -63,49 +61,6 @@ async def list_alarms(request: Request) -> dict[str, Any]:
 @router.get("/metrics")
 async def get_metrics(request: Request) -> dict[str, Any]:
     return _runtime(request).metrics.snapshot().model_dump(mode="json")
-
-
-MJPEG_BOUNDARY = b"sentinel-frame"
-
-
-async def _mjpeg_frames(runtime: SentinelRuntime) -> AsyncIterator[bytes]:
-    async for jpeg_bytes in runtime.video_preview.subscribe():
-        yield (
-            b"--" + MJPEG_BOUNDARY + b"\r\n"
-            b"Content-Type: image/jpeg\r\n"
-            b"Content-Length: " + str(len(jpeg_bytes)).encode() + b"\r\n\r\n"
-            + jpeg_bytes + b"\r\n"
-        )
-
-
-@router.get("/video/preview")
-async def video_preview(request: Request) -> StreamingResponse:
-    """MJPEG stream of the camera worker's feed, for an <img> tag on the
-    dashboard. Not a general-purpose media endpoint - one boundary format,
-    no seeking, no audio - just enough for a live operator preview panel.
-    """
-    runtime = _runtime(request)
-    if not runtime.settings.video_enabled:
-        raise HTTPException(status_code=404, detail="camera is not enabled")
-    return StreamingResponse(
-        _mjpeg_frames(runtime),
-        media_type=f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY.decode()}",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/video/pause")
-async def pause_video(request: Request) -> dict[str, Any]:
-    runtime = _runtime(request)
-    runtime.video_control.pause()
-    return {"video_paused": True}
-
-
-@router.post("/video/resume")
-async def resume_video(request: Request) -> dict[str, Any]:
-    runtime = _runtime(request)
-    runtime.video_control.resume()
-    return {"video_paused": False}
 
 
 @router.post("/alarms/{event_id}/acknowledge")

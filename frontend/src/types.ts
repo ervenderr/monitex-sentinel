@@ -76,7 +76,6 @@ export interface Metrics {
   video_connected: boolean;
   video_frames_sampled: number;
   video_events_emitted: number;
-  video_paused: boolean;
   escalations: number;
 }
 
@@ -85,8 +84,6 @@ export interface Health {
   stream_connected: boolean;
   provider: string;
   subscribers: number;
-  video_enabled: boolean;
-  video_zone: string;
 }
 
 /** Whether the dashboard's own connection to the backend is up - distinct from
